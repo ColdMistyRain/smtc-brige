@@ -1,4 +1,5 @@
 // Windows SMTC implementation using the windows-rs crate.
+use std::sync::LazyLock;
 use windows::core::HSTRING;
 use windows::Media::Control::GlobalSystemMediaTransportControlsSessionManager;
 use windows::Storage::Streams::{DataReader, IRandomAccessStreamReference};
@@ -21,10 +22,12 @@ fn to_string_lossy(h: &HSTRING) -> String {
     h.to_string_lossy()
 }
 
+static NCM_ID_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"^NCM-(\d+)$").unwrap());
+
 fn parse_ncm_id(genres: &[String]) -> i64 {
-    let re = regex::Regex::new(r"^NCM-(\d+)$").unwrap();
     for genre in genres {
-        if let Some(caps) = re.captures(genre) {
+        if let Some(caps) = NCM_ID_RE.captures(genre) {
             return caps[1].parse().unwrap_or(0);
         }
     }

@@ -59,6 +59,19 @@ async fn main() {
 
     let state = Arc::new(AppState::new());
 
+    // ── Background cache sweeper ─────────────────────────────────────────
+    {
+        let state = state.clone();
+        tokio::spawn(async move {
+            // Sweep every 5 minutes to keep caches lean.
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(300));
+            loop {
+                interval.tick().await;
+                state.sweep_all_caches().await;
+            }
+        });
+    }
+
     let app = Router::new()
         .route("/", get(|| async { handlers::html_page() }))
         .route("/health", get(handle_health))

@@ -3,8 +3,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::common::{
-    merge_translation, normalize_text, parse_lrc, search_score, urlencoding, CacheEntry,
-    LyricResult, MetaInfo, SmtcStatus, TrackInfo, EDGE_UA,
+    cache_insert_limited, merge_translation, normalize_text, parse_lrc, search_score, sweep_cache,
+    urlencoding, CacheEntry, LyricResult, MetaInfo, SmtcStatus, TrackInfo, MAX_CACHE_ENTRIES,
 };
 
 pub struct NeteaseSource {
@@ -25,6 +25,7 @@ impl NeteaseSource {
         lyric_cache_ms: u64,
         search_cache_ms: u64,
         meta_cache_ms: u64,
+        client: reqwest::Client,
     ) -> Self {
         Self {
             lyric_cache,
@@ -33,13 +34,7 @@ impl NeteaseSource {
             lyric_cache_ms,
             search_cache_ms,
             meta_cache_ms,
-            client: reqwest::Client::builder()
-                .user_agent(EDGE_UA)
-                .timeout(std::time::Duration::from_secs(7))
-                .pool_idle_timeout(std::time::Duration::from_secs(90))
-                .pool_max_idle_per_host(2)
-                .build()
-                .expect("reqwest client"),
+            client,
         }
     }
 
@@ -52,13 +47,15 @@ impl NeteaseSource {
 
         let key = normalize_text(&format!("{title} {artist}"));
         {
-            let cache = self.search_cache.lock().await;
+            let mut cache = self.search_cache.lock().await;
             if let Some(entry) = cache.get(&key) {
                 if entry.is_fresh(self.search_cache_ms) {
                     log::debug!("netease search cache hit: {key} -> {}", entry.value);
                     return entry.value;
                 }
             }
+            // Sweep expired entries on miss to keep cache lean.
+            sweep_cache(&mut cache, self.search_cache_ms);
         }
 
         log::debug!("netease search: title={title:?} artist={artist:?}");
@@ -112,7 +109,7 @@ impl NeteaseSource {
         let id = if best_score >= 45 { best_id } else { 0 };
         log::debug!("netease search result: id={id} score={best_score}");
         let mut cache = self.search_cache.lock().await;
-        cache.insert(key, CacheEntry::new(id));
+        cache_insert_limited(&mut cache, key, CacheEntry::new(id), self.search_cache_ms, MAX_CACHE_ENTRIES);
         id
     }
 
@@ -126,13 +123,14 @@ impl NeteaseSource {
         }
 
         {
-            let cache = self.lyric_cache.lock().await;
+            let mut cache = self.lyric_cache.lock().await;
             if let Some(entry) = cache.get(&ncm_id) {
                 if entry.is_fresh(self.lyric_cache_ms) {
                     log::debug!("netease lyric cache hit: {ncm_id}");
                     return entry.value.clone();
                 }
             }
+            sweep_cache(&mut cache, self.lyric_cache_ms);
         }
 
         log::debug!("netease fetch lyrics: id={ncm_id}");
@@ -172,7 +170,7 @@ impl NeteaseSource {
         }
 
         let mut cache = self.lyric_cache.lock().await;
-        cache.insert(ncm_id, CacheEntry::new(result.clone()));
+        cache_insert_limited(&mut cache, ncm_id, CacheEntry::new(result.clone()), self.lyric_cache_ms, MAX_CACHE_ENTRIES);
         result
     }
 
@@ -182,13 +180,14 @@ impl NeteaseSource {
         }
 
         {
-            let cache = self.meta_cache.lock().await;
+            let mut cache = self.meta_cache.lock().await;
             if let Some(entry) = cache.get(&ncm_id) {
                 if entry.is_fresh(self.meta_cache_ms) {
                     log::debug!("netease meta cache hit: {ncm_id}");
                     return entry.value.clone();
                 }
             }
+            sweep_cache(&mut cache, self.meta_cache_ms);
         }
 
         log::debug!("netease fetch meta: id={ncm_id}");
@@ -251,7 +250,7 @@ impl NeteaseSource {
         }
 
         let mut cache = self.meta_cache.lock().await;
-        cache.insert(ncm_id, CacheEntry::new(meta.clone()));
+        cache_insert_limited(&mut cache, ncm_id, CacheEntry::new(meta.clone()), self.meta_cache_ms, MAX_CACHE_ENTRIES);
         meta
     }
 

@@ -4,8 +4,9 @@ use std::sync::LazyLock;
 use tokio::sync::Mutex;
 
 use crate::common::{
-    decode_html, maybe_base64_text, merge_translation, normalize_text, parse_lrc, search_score,
-    split_artists, urlencoding, CacheEntry, LyricResult, MetaInfo, SmtcStatus, TrackInfo, EDGE_UA,
+    cache_insert_limited, decode_html, maybe_base64_text, merge_translation, normalize_text,
+    parse_lrc, search_score, split_artists, sweep_cache, urlencoding, CacheEntry, LyricResult,
+    MetaInfo, SmtcStatus, TrackInfo, MAX_CACHE_ENTRIES,
 };
 
 // ── QQ Cover URL helpers ────────────────────────────────────────────────────
@@ -69,8 +70,7 @@ impl QQMusicSource {
         meta_cache: Arc<Mutex<HashMap<String, CacheEntry<QQSong>>>>,
         lyric_cache_ms: u64,
         search_cache_ms: u64,
-        meta_cache_ms: u64,
-    ) -> Self {
+        meta_cache_ms: u64,        client: reqwest::Client,    ) -> Self {
         Self {
             lyric_cache,
             search_cache,
@@ -78,13 +78,7 @@ impl QQMusicSource {
             lyric_cache_ms,
             search_cache_ms,
             meta_cache_ms,
-            client: reqwest::Client::builder()
-                .user_agent(EDGE_UA)
-                .timeout(std::time::Duration::from_secs(9))
-                .pool_idle_timeout(std::time::Duration::from_secs(90))
-                .pool_max_idle_per_host(2)
-                .build()
-                .expect("reqwest client"),
+            client,
         }
     }
 
@@ -161,13 +155,13 @@ impl QQMusicSource {
         {
             let mut cache = self.meta_cache.lock().await;
             if id > 0 {
-                cache.insert(format!("id:{id}"), entry.clone());
+                cache_insert_limited(&mut cache, format!("id:{id}"), entry.clone(), self.meta_cache_ms, MAX_CACHE_ENTRIES);
             }
             if !mid.is_empty() {
-                cache.insert(format!("mid:{mid}"), entry.clone());
+                cache_insert_limited(&mut cache, format!("mid:{mid}"), entry.clone(), self.meta_cache_ms, MAX_CACHE_ENTRIES);
             }
             if !album_mid.is_empty() {
-                cache.insert(format!("album:{album_mid}"), entry);
+                cache_insert_limited(&mut cache, format!("album:{album_mid}"), entry, self.meta_cache_ms, MAX_CACHE_ENTRIES);
             }
         }
 
@@ -183,13 +177,14 @@ impl QQMusicSource {
 
         let key = normalize_text(&format!("{title} {artist}"));
         {
-            let cache = self.search_cache.lock().await;
+            let mut cache = self.search_cache.lock().await;
             if let Some(entry) = cache.get(&key) {
                 if entry.is_fresh(self.search_cache_ms) {
                     log::debug!("qqmusic search cache hit: {key}");
                     return entry.value.clone();
                 }
             }
+            sweep_cache(&mut cache, self.search_cache_ms);
         }
 
         log::debug!("qqmusic search: title={title:?} artist={artist:?}");
@@ -248,7 +243,7 @@ impl QQMusicSource {
             log::debug!("qqmusic search: no match (best_score={best_score})");
         }
         let mut cache = self.search_cache.lock().await;
-        cache.insert(key, CacheEntry::new(value.clone()));
+        cache_insert_limited(&mut cache, key, CacheEntry::new(value.clone()), self.search_cache_ms, MAX_CACHE_ENTRIES);
         value
     }
 
@@ -273,13 +268,14 @@ impl QQMusicSource {
 
         let cache_key = format!("qq:{}", if song_id > 0 { song_id.to_string() } else { mid.clone() });
         {
-            let cache = self.lyric_cache.lock().await;
+            let mut cache = self.lyric_cache.lock().await;
             if let Some(entry) = cache.get(&cache_key) {
                 if entry.is_fresh(self.lyric_cache_ms) {
                     log::debug!("qqmusic lyric cache hit: {cache_key}");
                     return entry.value.clone();
                 }
             }
+            sweep_cache(&mut cache, self.lyric_cache_ms);
         }
 
         log::debug!("qqmusic fetch lyrics: song_id={song_id} mid={mid}");
@@ -360,7 +356,7 @@ impl QQMusicSource {
                                 lines,
                             };
                             let mut cache = self.lyric_cache.lock().await;
-                            cache.insert(cache_key, CacheEntry::new(value.clone()));
+                            cache_insert_limited(&mut cache, cache_key, CacheEntry::new(value.clone()), self.lyric_cache_ms, MAX_CACHE_ENTRIES);
                             return value;
                         }
                     }
@@ -374,7 +370,7 @@ impl QQMusicSource {
             lines: vec![],
         };
         let mut cache = self.lyric_cache.lock().await;
-        cache.insert(cache_key, CacheEntry::new(value.clone()));
+        cache_insert_limited(&mut cache, cache_key, CacheEntry::new(value.clone()), self.lyric_cache_ms, MAX_CACHE_ENTRIES);
         value
     }
 

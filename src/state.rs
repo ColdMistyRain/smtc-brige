@@ -26,6 +26,15 @@ pub struct AppState {
 
 impl AppState {
     pub fn new() -> Self {
+        // Create a single shared HTTP client for all sources.
+        let http_client = reqwest::Client::builder()
+            .user_agent(EDGE_UA)
+            .timeout(std::time::Duration::from_secs(9))
+            .pool_idle_timeout(std::time::Duration::from_secs(90))
+            .pool_max_idle_per_host(2)
+            .build()
+            .expect("reqwest client");
+
         let netease = NeteaseSource::new(
             Arc::new(Mutex::new(HashMap::new())),
             Arc::new(Mutex::new(HashMap::new())),
@@ -33,6 +42,7 @@ impl AppState {
             LYRIC_CACHE_MS,
             SEARCH_CACHE_MS,
             META_CACHE_MS,
+            http_client.clone(),
         );
 
         let qqmusic = QQMusicSource::new(
@@ -42,15 +52,8 @@ impl AppState {
             LYRIC_CACHE_MS,
             SEARCH_CACHE_MS,
             META_CACHE_MS,
+            http_client.clone(),
         );
-
-        let http_client = reqwest::Client::builder()
-            .user_agent(EDGE_UA)
-            .timeout(std::time::Duration::from_secs(9))
-            .pool_idle_timeout(std::time::Duration::from_secs(90))
-            .pool_max_idle_per_host(2)
-            .build()
-            .expect("reqwest client");
 
         Self {
             status_cache: Mutex::new(None),
@@ -61,6 +64,69 @@ impl AppState {
             netease,
             qqmusic,
             http_client,
+        }
+    }
+
+    /// Sweep all caches (lyric, search, meta) for both providers.
+    pub async fn sweep_all_caches(&self) {
+        use crate::common::sweep_cache;
+
+        // NetEase caches
+        {
+            let mut c = self.netease.lyric_cache.lock().await;
+            let before = c.len();
+            sweep_cache(&mut c, self.netease.lyric_cache_ms);
+            let after = c.len();
+            if before != after {
+                log::debug!("netease lyric cache swept: {before} -> {after}");
+            }
+        }
+        {
+            let mut c = self.netease.search_cache.lock().await;
+            let before = c.len();
+            sweep_cache(&mut c, self.netease.search_cache_ms);
+            let after = c.len();
+            if before != after {
+                log::debug!("netease search cache swept: {before} -> {after}");
+            }
+        }
+        {
+            let mut c = self.netease.meta_cache.lock().await;
+            let before = c.len();
+            sweep_cache(&mut c, self.netease.meta_cache_ms);
+            let after = c.len();
+            if before != after {
+                log::debug!("netease meta cache swept: {before} -> {after}");
+            }
+        }
+
+        // QQ Music caches
+        {
+            let mut c = self.qqmusic.lyric_cache.lock().await;
+            let before = c.len();
+            sweep_cache(&mut c, self.qqmusic.lyric_cache_ms);
+            let after = c.len();
+            if before != after {
+                log::debug!("qqmusic lyric cache swept: {before} -> {after}");
+            }
+        }
+        {
+            let mut c = self.qqmusic.search_cache.lock().await;
+            let before = c.len();
+            sweep_cache(&mut c, self.qqmusic.search_cache_ms);
+            let after = c.len();
+            if before != after {
+                log::debug!("qqmusic search cache swept: {before} -> {after}");
+            }
+        }
+        {
+            let mut c = self.qqmusic.meta_cache.lock().await;
+            let before = c.len();
+            sweep_cache(&mut c, self.qqmusic.meta_cache_ms);
+            let after = c.len();
+            if before != after {
+                log::debug!("qqmusic meta cache swept: {before} -> {after}");
+            }
         }
     }
 }

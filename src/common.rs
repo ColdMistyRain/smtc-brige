@@ -147,6 +147,43 @@ impl<T> CacheEntry<T> {
     }
 }
 
+/// Sweep expired entries from a HashMap cache. Returns the new size.
+pub fn sweep_cache<K: std::cmp::Eq + std::hash::Hash, V>(
+    cache: &mut HashMap<K, CacheEntry<V>>,
+    ttl_ms: u64,
+) -> usize {
+    cache.retain(|_, entry| entry.is_fresh(ttl_ms));
+    cache.len()
+}
+
+/// Insert with eviction: sweep expired, then if still over limit, remove
+/// arbitrary old entries to stay under max_entries.
+pub fn cache_insert_limited<K, V>(
+    cache: &mut HashMap<K, CacheEntry<V>>,
+    key: K,
+    entry: CacheEntry<V>,
+    ttl_ms: u64,
+    max_entries: usize,
+) where
+    K: std::cmp::Eq + std::hash::Hash,
+{
+    // First, sweep expired entries.
+    sweep_cache(cache, ttl_ms);
+    // If still over limit, evict oldest (by insertion time) down to 75% of max.
+    if cache.len() >= max_entries {
+        let target = max_entries * 3 / 4;
+        let mut vec: Vec<_> = cache.drain().collect();
+        vec.sort_by_key(|(_, entry)| entry.at);
+        for (k, v) in vec.into_iter().take(target) {
+            cache.insert(k, v);
+        }
+    }
+    cache.insert(key, entry);
+}
+
+/// Max entries per individual cache to prevent unbounded memory growth.
+pub const MAX_CACHE_ENTRIES: usize = 512;
+
 // ── Constants ───────────────────────────────────────────────────────────────
 
 pub const EDGE_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0";

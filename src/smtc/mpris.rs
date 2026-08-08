@@ -1,10 +1,14 @@
 // Linux MPRIS implementation via D-Bus.
 use std::collections::HashMap;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use dbus::blocking::Connection;
 
 use crate::common::SmtcStatus;
+
+static NCM_ID_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"^NCM-(\d+)$").unwrap());
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -81,9 +85,8 @@ fn read_player_info(conn: &Connection, bus_name: &str) -> Option<PlayerInfo> {
         .map(variant_to_string_list)
         .unwrap_or_default();
     let ncm_id = {
-        let re = regex::Regex::new(r"^NCM-(\d+)$").unwrap();
         genres.iter()
-            .find_map(|g| re.captures(g).and_then(|c| c[1].parse().ok()))
+            .find_map(|g| NCM_ID_RE.captures(g).and_then(|c| c[1].parse().ok()))
             .unwrap_or(0)
     };
 
