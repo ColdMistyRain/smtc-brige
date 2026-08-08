@@ -361,8 +361,9 @@ pub fn lyric_at(lines: &[LrcLine], position_ms: u64) -> LyricPosition {
     LyricPosition {
         index,
         at_ms: if index >= 0 { lines[index as usize].at_ms } else { 0 },
-        next_at_ms: if (index as usize + 1) < lines.len() {
-            lines[index as usize + 1].at_ms
+        next_at_ms: if index >= 0 {
+            let i = index as usize;
+            if i + 1 < lines.len() { lines[i + 1].at_ms } else { 0 }
         } else {
             0
         },
@@ -371,8 +372,9 @@ pub fn lyric_at(lines: &[LrcLine], position_ms: u64) -> LyricPosition {
         } else {
             String::new()
         },
-        next: if (index as usize + 1) < lines.len() {
-            lines[index as usize + 1].text.clone()
+        next: if index >= 0 {
+            let i = index as usize;
+            if i + 1 < lines.len() { lines[i + 1].text.clone() } else { String::new() }
         } else {
             String::new()
         },

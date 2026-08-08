@@ -53,11 +53,13 @@ impl NeteaseSource {
             let cache = self.search_cache.lock().await;
             if let Some(entry) = cache.get(&key) {
                 if entry.is_fresh(self.search_cache_ms) {
+                    log::debug!("netease search cache hit: {key} -> {}", entry.value);
                     return entry.value;
                 }
             }
         }
 
+        log::info!("netease search: title={title:?} artist={artist:?}");
         let query = urlencoding(&format!("{title} {artist}"));
         let url = format!(
             "https://music.163.com/api/search/get/web?csrf_token=&type=1&limit=8&s={query}"
@@ -106,6 +108,7 @@ impl NeteaseSource {
         }
 
         let id = if best_score >= 45 { best_id } else { 0 };
+        log::info!("netease search result: id={id} score={best_score}");
         let mut cache = self.search_cache.lock().await;
         cache.insert(key, CacheEntry::new(id));
         id
@@ -124,11 +127,13 @@ impl NeteaseSource {
             let cache = self.lyric_cache.lock().await;
             if let Some(entry) = cache.get(&ncm_id) {
                 if entry.is_fresh(self.lyric_cache_ms) {
+                    log::debug!("netease lyric cache hit: {ncm_id}");
                     return entry.value.clone();
                 }
             }
         }
 
+        log::info!("netease fetch lyrics: id={ncm_id}");
         let url = format!("https://music.163.com/api/song/lyric?id={ncm_id}&lv=-1&kv=-1&tv=-1");
         let mut result = LyricResult {
             source: format!("netease:{ncm_id}"),
@@ -178,11 +183,13 @@ impl NeteaseSource {
             let cache = self.meta_cache.lock().await;
             if let Some(entry) = cache.get(&ncm_id) {
                 if entry.is_fresh(self.meta_cache_ms) {
+                    log::debug!("netease meta cache hit: {ncm_id}");
                     return entry.value.clone();
                 }
             }
         }
 
+        log::info!("netease fetch meta: id={ncm_id}");
         let url = format!("https://music.163.com/api/song/detail/?ids=%5B{ncm_id}%5D");
         let mut meta = MetaInfo::default();
 
@@ -251,10 +258,11 @@ impl NeteaseSource {
         let mut source_hint = "smtc";
 
         if ncm_id == 0 {
+            log::info!("netease resolve: no ncm_id, searching by title/artist…");
             let track = TrackInfo {
                 title: status.title.clone(),
                 artist: status.artist.clone(),
-                duration_ms: status.duration_ms as u64,
+                duration_ms: status.duration_ms.max(0) as u64,
             };
             ncm_id = self.search_song(&track).await;
             source_hint = "search";

@@ -184,11 +184,13 @@ impl QQMusicSource {
             let cache = self.search_cache.lock().await;
             if let Some(entry) = cache.get(&key) {
                 if entry.is_fresh(self.search_cache_ms) {
+                    log::debug!("qqmusic search cache hit: {key}");
                     return entry.value.clone();
                 }
             }
         }
 
+        log::info!("qqmusic search: title={title:?} artist={artist:?}");
         let query = urlencoding(&format!("{title} {artist}"));
         let endpoints = [
             format!("https://c.y.qq.com/soso/fcgi-bin/client_search_cp?ct=24&qqmusic_ver=1298&new_json=1&remoteplace=txt.yqq.song&searchid=1&t=0&aggr=1&cr=1&catZhida=1&lossless=0&flag_qc=0&p=1&n=8&w={query}&format=json&platform=yqq.json&needNewCode=0"),
@@ -238,6 +240,11 @@ impl QQMusicSource {
         }
 
         let value = best.filter(|_| best_score >= 45);
+        if let Some(ref song) = value {
+            log::info!("qqmusic search result: id={} mid={} score={best_score}", song.id, song.mid);
+        } else {
+            log::info!("qqmusic search: no match (best_score={best_score})");
+        }
         let mut cache = self.search_cache.lock().await;
         cache.insert(key, CacheEntry::new(value.clone()));
         value
@@ -267,11 +274,13 @@ impl QQMusicSource {
             let cache = self.lyric_cache.lock().await;
             if let Some(entry) = cache.get(&cache_key) {
                 if entry.is_fresh(self.lyric_cache_ms) {
+                    log::debug!("qqmusic lyric cache hit: {cache_key}");
                     return entry.value.clone();
                 }
             }
         }
 
+        log::info!("qqmusic fetch lyrics: song_id={song_id} mid={mid}");
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -368,10 +377,11 @@ impl QQMusicSource {
     }
 
     pub async fn resolve(&self, status: &mut SmtcStatus) -> (LyricResult, MetaInfo) {
+        log::info!("qqmusic resolve: title={:?} artist={:?}", status.title, status.artist);
         let track = TrackInfo {
             title: status.title.clone(),
             artist: status.artist.clone(),
-            duration_ms: status.duration_ms as u64,
+            duration_ms: status.duration_ms.max(0) as u64,
         };
 
         if let Some(qq) = self.search_song(&track).await {
@@ -437,6 +447,7 @@ impl QQMusicSource {
         }
     }
 
+    #[allow(dead_code)]
     pub fn cover_candidates(&self, id: &str, provider: &str) -> Vec<String> {
         if provider == "qqartist" {
             [92, 150, 300, 500]

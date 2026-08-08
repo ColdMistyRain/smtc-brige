@@ -15,7 +15,7 @@ use axum::{
     routing::get,
     Router,
 };
-use base64::Engine;
+use log;
 use serde::Deserialize;
 use tokio::sync::Mutex;
 
@@ -24,7 +24,7 @@ use common::{
 };
 use netease::NeteaseSource;
 use qqmusic::QQMusicSource;
-use smtc::{resize_cover_jpeg, smtc_control, smtc_status_raw, smtc_thumbnail};
+use smtc::{smtc_control, smtc_status_raw, smtc_thumbnail};
 
 // ── Configuration ───────────────────────────────────────────────────────────
 
@@ -43,6 +43,8 @@ const EDGE_UA: &str = common::EDGE_UA;
 struct AppState {
     // Status cache
     status_cache: Mutex<Option<(Instant, SmtcStatus)>>,
+    // SMTC thumbnail cache
+    thumbnail_cache: Mutex<Option<(Instant, Vec<u8>, String)>>,
 
     // Sources (each owns its own cache references)
     netease: NeteaseSource,
@@ -87,6 +89,7 @@ impl AppState {
 
         Self {
             status_cache: Mutex::new(None),
+            thumbnail_cache: Mutex::new(None),
             netease,
             qqmusic,
             http_client,
@@ -96,12 +99,17 @@ impl AppState {
 
 // ── SMTC Status Helpers ────────────────────────────────────────────────────
 
-/// JS `sourceForStatus` uses Array.find() on [neteaseSource, qqMusicSource].
-/// neteaseSource.matches always returns true and is first → always picks netease.
-/// QQ Music source is only used when explicitly requested via query param.
-fn source_for_status(_status: &SmtcStatus, _qqmusic: &QQMusicSource) -> &'static str {
-    // Matching JS behaviour: neteaseSource.matches() always returns true,
-    // and it's first in sourceAdapters, so find() always returns it.
+/// Pick the best lyric/meta source based on the SMTC source app and available metadata.
+///
+/// Priority:
+/// 1. If the source app is QQ Music → use QQ Music API (direct song ID lookup)
+/// 2. If the SMTC genre contains NCM-{id} → use NetEase API (direct song ID lookup)
+/// 3. Otherwise → fall back to NetEase (title/artist search)
+fn source_for_status(status: &SmtcStatus) -> &'static str {
+    if is_qqmusic_source(&status.source) {
+        return "qqmusic";
+    }
+    // NetEase is the default fallback — it can search by title+artist when no ncm_id.
     "netease"
 }
 
@@ -122,15 +130,22 @@ async fn enriched_status(state: &AppState, force: bool) -> SmtcStatus {
         let cache = state.status_cache.lock().await;
         if let Some((at, ref cached)) = *cache {
             if now.duration_since(at).as_millis() < CACHE_MS as u128 {
+                log::debug!("status cache hit (age: {}ms)", now.duration_since(at).as_millis());
                 return cached.clone();
             }
         }
     }
 
+    log::debug!("fetching SMTC status via PowerShell…");
+
     // Fetch raw SMTC status
     match smtc_status_raw().await {
-        Ok(raw) => {
-            let mut status: SmtcStatus = raw.into();
+        Ok(mut status) => {
+
+            log::info!(
+                "SMTC: source={} state={} title={:?} artist={:?} ncm_id={}",
+                status.source, status.state, status.title, status.artist, status.ncm_id
+            );
 
             if status.connected {
                 // Infer metadata (strip suffixes, etc.)
@@ -143,28 +158,39 @@ async fn enriched_status(state: &AppState, force: bool) -> SmtcStatus {
                     "generic".to_string()
                 };
 
-                // Resolve lyrics & meta via appropriate source
-                let source_name = source_for_status(&status, &state.qqmusic);
-                let (found, meta) = if source_name == "qqmusic" {
-                    state.qqmusic.resolve(&mut status).await
+                // Resolve lyrics via the detected source.
+                // QQ Music → try QQ first, fall back to NetEase if nothing found.
+                // Others  → NetEase (direct ncm_id lookup or title/artist search).
+                let source_name = source_for_status(&status);
+                log::info!("resolving lyrics via source={source_name}…");
+                let found = if source_name == "qqmusic" {
+                    let (f, _m) = state.qqmusic.resolve(&mut status).await;
+                    if f.lines.is_empty() {
+                        log::info!("QQ Music found nothing — falling back to NetEase");
+                        state.netease.resolve(&mut status).await.0
+                    } else {
+                        f
+                    }
                 } else {
-                    state.netease.resolve(&mut status).await
+                    state.netease.resolve(&mut status).await.0
                 };
 
-                // Fill in album & duration from meta
-                if status.album.is_empty() && !meta.album.is_empty() {
-                    status.album = meta.album;
-                }
-                if (status.duration_ms <= 0) && meta.duration_ms > 0 {
-                    status.duration_ms = meta.duration_ms as i64;
-                }
+                log::info!(
+                    "lyrics: {} lines from {} (translation: {})",
+                    found.lines.len(),
+                    found.source,
+                    found.translation_line_count
+                );
+
+                // Cover comes directly from SMTC thumbnail — no external API needed.
+                // Point to our own /cover endpoint so <img> tags can load it.
+                status.cover_url = format!("http://127.0.0.1:{PORT}/cover?provider=smtc");
 
                 status.ncm_id_text = if status.ncm_id > 0 {
                     status.ncm_id.to_string()
                 } else {
                     String::new()
                 };
-                status.cover_url = meta.cover_url;
                 status.lyrics_available = !found.lines.is_empty();
                 status.translation_line_count = found.translation_line_count;
                 status.lyric_source = found.source;
@@ -179,6 +205,7 @@ async fn enriched_status(state: &AppState, force: bool) -> SmtcStatus {
             status
         }
         Err(e) => {
+            log::error!("SMTC status failed: {e}");
             let fallback = SmtcStatus {
                 ok: false,
                 connected: false,
@@ -201,9 +228,11 @@ async fn fetch_cover_buffer(
     url: &str,
     referer: &str,
 ) -> Result<(Vec<u8>, String), String> {
+    log::debug!("fetching cover: {url}");
     let resp = client
         .get(url)
         .header("Referer", referer)
+        .header("Accept", "image/jpeg,image/png,image/*;q=0.8,*/*;q=0.5")
         .send()
         .await
         .map_err(|e| format!("cover request: {e}"))?;
@@ -237,6 +266,7 @@ async fn fetch_cover_buffer(
     Ok((body.to_vec(), detected_type))
 }
 
+#[allow(dead_code)]
 async fn fetch_first_buffer(
     client: &reqwest::Client,
     urls: &[String],
@@ -420,45 +450,36 @@ async fn handle_cover(
             .or_else(|| params.ncm_id.clone())
             .unwrap_or_default();
 
-        if provider.is_empty() && params.ncm_id.is_some() {
-            provider = "netease".to_string();
+        if provider.is_empty() {
+            // Default to SMTC thumbnail when no provider specified.
+            provider = "smtc".to_string();
         }
 
         if provider == "smtc" {
-            // Get thumbnail from SMTC directly
-            let thumb = smtc_thumbnail().await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-            if !thumb.ok || thumb.base64.is_empty() {
-                return Err((StatusCode::NOT_FOUND, thumb.error));
+            // Serve cached SMTC thumbnail to avoid overhead.
+            let now = Instant::now();
+            {
+                let cache = state.thumbnail_cache.lock().await;
+                if let Some((at, ref body, ref ct)) = *cache {
+                    if now.duration_since(at).as_millis() < 5000 {
+                        return Ok(binary_response(body.clone(), ct, false));
+                    }
+                }
             }
-            let body = base64::engine::general_purpose::STANDARD
-                .decode(&thumb.base64)
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("base64: {e}")))?;
-            let content_type = if thumb.content_type.is_empty() {
-                "image/jpeg"
-            } else {
-                &thumb.content_type
-            };
-            return Ok(binary_response(body, content_type, false));
+
+            let (body, content_type) = smtc_thumbnail().await
+                .map_err(|e| (StatusCode::NOT_FOUND, e))?;
+            let ct = if content_type.is_empty() { "image/jpeg" } else { &content_type };
+            let mut cache = state.thumbnail_cache.lock().await;
+            *cache = Some((now, body.clone(), ct.to_string()));
+            return Ok(binary_response(body, ct, false));
         }
 
         // Resolve provider aliases ("qq"/"qqartist" -> "qqmusic")
-        let canonical = resolve_provider(&provider);
+        let _canonical = resolve_provider(&provider);
 
-        if canonical == "qqmusic" {
-            let urls = state.qqmusic.cover_candidates(&id_text, &provider);
-            if urls.is_empty() {
-                return Err((StatusCode::NOT_FOUND, "cover not found".to_string()));
-            }
-            let (body, _content_type) =
-                fetch_first_buffer(&state.http_client, &urls, "https://y.qq.com/")
-                    .await
-                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-            // QQ Music covers need to be resized to device size (88x88)
-            let resized = resize_cover_jpeg(&body, 88)
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-            return Ok(binary_response(resized, "image/jpeg", true));
-        }
+        // All non-SMTC covers go through NetEase for now.
+        // (QQ Music cover CDN is unreliable on some hardware.)
 
         // NetEase or generic (non-qqmusic providers like "generic", "netease" etc.)
         let cover_url = {
@@ -498,6 +519,7 @@ async fn handle_control(
     Query(params): Query<ControlQuery>,
 ) -> Response {
     let action = params.action.unwrap_or_else(|| "playpause".to_string());
+    log::info!("control action: {action}");
 
     // Respond immediately, then perform the action in background
     let accepted = serde_json::json!({"ok": true, "accepted": true, "action": action});
@@ -507,12 +529,14 @@ async fn handle_control(
     let action_clone = action.clone();
     tokio::spawn(async move {
         match smtc_control(&action_clone, SEEK_MS).await {
-            Ok(_) => {
+            Ok(()) => {
+                log::info!("SMTC control {action_clone} OK");
                 // Invalidate cache so next status request refreshes
                 let mut cache = state_clone.status_cache.lock().await;
                 *cache = None;
             }
             Err(e) => {
+                log::error!("SMTC control {action_clone} failed: {e}");
                 let mut cache = state_clone.status_cache.lock().await;
                 *cache = Some((
                     Instant::now(),
@@ -588,10 +612,12 @@ async fn main() {
         .with_state(state);
 
     let addr = format!("{HOST}:{PORT}");
+    log::info!("SMTC bridge starting on http://{addr}");
     println!("SMTC bridge listening on http://{addr}");
     println!("Lyrics: InfLink NCM-{{id}} -> NetEase, QQ Music SMTC -> QQ Music API");
 
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+    log::info!("server ready");
     axum::serve(listener, app).await.unwrap();
 }
 
