@@ -18,10 +18,27 @@ use state::AppState;
 
 #[tokio::main]
 async fn main() {
+    // ── Log rotation ─────────────────────────────────────────────────────
+    const LOG_PATH: &str = "smtc-bridge.log";
+    const MAX_LOG_BYTES: u64 = 10 * 1024 * 1024; // 10 MiB
+
+    if let Ok(meta) = std::fs::metadata(LOG_PATH) {
+        if meta.len() > MAX_LOG_BYTES {
+            let backup = format!("{LOG_PATH}.old");
+            let _ = std::fs::remove_file(&backup);
+            if let Err(e) = std::fs::rename(LOG_PATH, &backup) {
+                eprintln!("log rotation failed: {e}");
+            } else {
+                eprintln!("rotated {LOG_PATH} -> {backup} ({:.1} MiB)",
+                    meta.len() as f64 / (1024.0 * 1024.0));
+            }
+        }
+    }
+
     let log_file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open("smtc-bridge.log")
+        .open(LOG_PATH)
         .expect("open log file");
 
     Dispatch::new()

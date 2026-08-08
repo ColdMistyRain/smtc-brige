@@ -35,6 +35,7 @@ pub fn resolve_provider(provider: &str) -> &str {
 pub async fn enriched_status(state: &AppState, force: bool) -> SmtcStatus {
     let now = Instant::now();
 
+    // ── cache hit (fast path, no lock contention) ────────────────────────
     if !force {
         let cache = state.status_cache.lock().await;
         if let Some((at, ref cached)) = *cache {
@@ -45,11 +46,25 @@ pub async fn enriched_status(state: &AppState, force: bool) -> SmtcStatus {
         }
     }
 
+    // ── serialised fetch to avoid stampeding SMTC / lyrics APIs ────────
+    let _guard = state.fetch_mutex.lock().await;
+
+    // Double-check: another request may have already populated the cache
+    // while we were waiting for the mutex.
+    if !force {
+        let cache = state.status_cache.lock().await;
+        if let Some((at, ref cached)) = *cache {
+            if now.duration_since(at).as_millis() < CACHE_MS as u128 {
+                return cached.clone();
+            }
+        }
+    }
+
     log::debug!("fetching SMTC status…");
 
     match smtc_status_raw().await {
         Ok(mut status) => {
-            log::info!("SMTC: source={} state={} title={:?} artist={:?} ncm_id={}",
+            log::debug!("SMTC: source={} state={} title={:?} artist={:?} ncm_id={}",
                 status.source, status.state, status.title, status.artist, status.ncm_id);
 
             if status.connected {
@@ -61,18 +76,18 @@ pub async fn enriched_status(state: &AppState, force: bool) -> SmtcStatus {
                 };
 
                 let source_name = source_for_status(&status);
-                log::info!("resolving lyrics via source={source_name}…");
+                log::debug!("resolving lyrics via source={source_name}…");
                 let found = if source_name == "qqmusic" {
                     let (f, _) = state.qqmusic.resolve(&mut status).await;
                     if f.lines.is_empty() {
-                        log::info!("QQ Music found nothing — falling back to NetEase");
+                        log::debug!("QQ Music found nothing — falling back to NetEase");
                         state.netease.resolve(&mut status).await.0
                     } else { f }
                 } else {
                     state.netease.resolve(&mut status).await.0
                 };
 
-                log::info!("lyrics: {} lines from {} (translation: {})",
+                log::debug!("lyrics: {} lines from {} (translation: {})",
                     found.lines.len(), found.source, found.translation_line_count);
 
                 let cover_id = {
@@ -89,9 +104,32 @@ pub async fn enriched_status(state: &AppState, force: bool) -> SmtcStatus {
                 status.translation_line_count = found.translation_line_count;
                 status.lyric_source = found.source;
                 status.lyric = lyric_at(&found.lines, status.position_ms.max(0) as u64);
+
+                // Persist as last-known-good for disconnected-fallback.
+                {
+                    let mut last = state.last_known_status.lock().await;
+                    *last = Some(status.clone());
+                }
             } else {
+                // ── Disconnected → serve last-known-good if fresh enough ──
                 status.lyrics_available = false;
                 status.lyric = LyricPosition::default();
+
+                let last = state.last_known_status.lock().await;
+                if let Some(ref last_status) = *last {
+                    log::warn!("SMTC disconnected — returning last-known status (title={:?})",
+                        last_status.title);
+                    let mut fallback = last_status.clone();
+                    // Let the caller distinguish stale data.
+                    // We reuse the `connected` field: keep it false so
+                    // consumers can still react.
+                    fallback.connected = false;
+                    fallback.state = format!("{} (stale)", fallback.state);
+
+                    let mut cache = state.status_cache.lock().await;
+                    *cache = Some((now, fallback.clone()));
+                    return fallback;
+                }
             }
 
             let mut cache = state.status_cache.lock().await;
@@ -100,6 +138,21 @@ pub async fn enriched_status(state: &AppState, force: bool) -> SmtcStatus {
         }
         Err(e) => {
             log::error!("SMTC status failed: {e}");
+
+            // Try returning last-known-good before giving up entirely.
+            let last = state.last_known_status.lock().await;
+            if let Some(ref last_status) = *last {
+                log::warn!("SMTC error — returning last-known status as fallback");
+                let mut fallback = last_status.clone();
+                fallback.connected = false;
+                fallback.ok = false;
+                fallback.error = e;
+                fallback.state = format!("{} (stale)", fallback.state);
+                let mut cache = state.status_cache.lock().await;
+                *cache = Some((now, fallback.clone()));
+                return fallback;
+            }
+
             let fallback = SmtcStatus {
                 ok: false, connected: false, error: e, state: "error".to_string(),
                 lyric: LyricPosition::default(), ..Default::default()
@@ -249,7 +302,7 @@ pub async fn handle_cover(State(state): State<Arc<AppState>>, Query(params): Que
 
         if provider == "smtc" {
             let size = params.size.unwrap_or(COVER_SIZE_DEFAULT).clamp(COVER_SIZE_MIN, COVER_SIZE_MAX);
-            log::info!("cover: smtc thumbnail (size={size})");
+            log::debug!("cover: smtc thumbnail (size={size})");
             let now = Instant::now();
             {
                 let cache = state.thumbnail_cache.lock().await;
@@ -261,7 +314,7 @@ pub async fn handle_cover(State(state): State<Arc<AppState>>, Query(params): Que
             }
             let (body, _) = smtc_thumbnail().await.map_err(|e| { log::error!("cover: smtc_thumbnail failed: {e}"); (StatusCode::NOT_FOUND, e) })?;
             let resized = resize_cover_jpeg(&body, size).map_err(|e| { log::error!("cover: resize failed: {e}"); (StatusCode::INTERNAL_SERVER_ERROR, e) })?;
-            log::info!("cover: OK, {} -> {} bytes", body.len(), resized.len());
+            log::debug!("cover: OK, {} -> {} bytes", body.len(), resized.len());
             let mut cache = state.thumbnail_cache.lock().await;
             *cache = Some((now, resized.clone(), "image/jpeg".to_string()));
             return Ok(binary_response(resized, "image/jpeg", false));
@@ -283,14 +336,19 @@ pub struct ControlQuery { pub action: Option<String> }
 
 pub async fn handle_control(State(state): State<Arc<AppState>>, _method: Method, Query(params): Query<ControlQuery>) -> Response {
     let action = params.action.unwrap_or_else(|| "playpause".to_string());
-    log::info!("control action: {action}");
+    log::debug!("control action: {action}");
     let accepted = serde_json::json!({"ok": true, "accepted": true, "action": action});
+
     let state_clone = state.clone();
     let action_clone = action.clone();
+
+    // Serialise control operations — SMTC does not handle concurrent
+    // play/pause/seek gracefully.
     tokio::spawn(async move {
+        let _guard = state_clone.control_lock.lock().await;
         match smtc_control(&action_clone, SEEK_MS).await {
             Ok(()) => {
-                log::info!("SMTC control {action_clone} OK");
+                log::debug!("SMTC control {action_clone} OK");
                 let mut cache = state_clone.status_cache.lock().await;
                 *cache = None;
             }
@@ -304,6 +362,7 @@ pub async fn handle_control(State(state): State<Arc<AppState>>, _method: Method,
             }
         }
     });
+
     json_response(StatusCode::ACCEPTED, &accepted)
 }
 

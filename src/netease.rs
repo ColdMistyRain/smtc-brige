@@ -36,6 +36,8 @@ impl NeteaseSource {
             client: reqwest::Client::builder()
                 .user_agent(EDGE_UA)
                 .timeout(std::time::Duration::from_secs(7))
+                .pool_idle_timeout(std::time::Duration::from_secs(90))
+                .pool_max_idle_per_host(2)
                 .build()
                 .expect("reqwest client"),
         }
@@ -59,7 +61,7 @@ impl NeteaseSource {
             }
         }
 
-        log::info!("netease search: title={title:?} artist={artist:?}");
+        log::debug!("netease search: title={title:?} artist={artist:?}");
         let query = urlencoding(&format!("{title} {artist}"));
         let url = format!(
             "https://music.163.com/api/search/get/web?csrf_token=&type=1&limit=8&s={query}"
@@ -108,7 +110,7 @@ impl NeteaseSource {
         }
 
         let id = if best_score >= 45 { best_id } else { 0 };
-        log::info!("netease search result: id={id} score={best_score}");
+        log::debug!("netease search result: id={id} score={best_score}");
         let mut cache = self.search_cache.lock().await;
         cache.insert(key, CacheEntry::new(id));
         id
@@ -133,7 +135,7 @@ impl NeteaseSource {
             }
         }
 
-        log::info!("netease fetch lyrics: id={ncm_id}");
+        log::debug!("netease fetch lyrics: id={ncm_id}");
         let url = format!("https://music.163.com/api/song/lyric?id={ncm_id}&lv=-1&kv=-1&tv=-1");
         let mut result = LyricResult {
             source: format!("netease:{ncm_id}"),
@@ -189,7 +191,7 @@ impl NeteaseSource {
             }
         }
 
-        log::info!("netease fetch meta: id={ncm_id}");
+        log::debug!("netease fetch meta: id={ncm_id}");
         let url = format!("https://music.163.com/api/song/detail/?ids=%5B{ncm_id}%5D");
         let mut meta = MetaInfo::default();
 
@@ -258,7 +260,7 @@ impl NeteaseSource {
         let mut source_hint = "smtc";
 
         if ncm_id == 0 {
-            log::info!("netease resolve: no ncm_id, searching by title/artist…");
+            log::debug!("netease resolve: no ncm_id, searching by title/artist…");
             let track = TrackInfo {
                 title: status.title.clone(),
                 artist: status.artist.clone(),

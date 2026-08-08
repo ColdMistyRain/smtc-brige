@@ -81,6 +81,8 @@ impl QQMusicSource {
             client: reqwest::Client::builder()
                 .user_agent(EDGE_UA)
                 .timeout(std::time::Duration::from_secs(9))
+                .pool_idle_timeout(std::time::Duration::from_secs(90))
+                .pool_max_idle_per_host(2)
                 .build()
                 .expect("reqwest client"),
         }
@@ -190,7 +192,7 @@ impl QQMusicSource {
             }
         }
 
-        log::info!("qqmusic search: title={title:?} artist={artist:?}");
+        log::debug!("qqmusic search: title={title:?} artist={artist:?}");
         let query = urlencoding(&format!("{title} {artist}"));
         let endpoints = [
             format!("https://c.y.qq.com/soso/fcgi-bin/client_search_cp?ct=24&qqmusic_ver=1298&new_json=1&remoteplace=txt.yqq.song&searchid=1&t=0&aggr=1&cr=1&catZhida=1&lossless=0&flag_qc=0&p=1&n=8&w={query}&format=json&platform=yqq.json&needNewCode=0"),
@@ -241,9 +243,9 @@ impl QQMusicSource {
 
         let value = best.filter(|_| best_score >= 45);
         if let Some(ref song) = value {
-            log::info!("qqmusic search result: id={} mid={} score={best_score}", song.id, song.mid);
+            log::debug!("qqmusic search result: id={} mid={} score={best_score}", song.id, song.mid);
         } else {
-            log::info!("qqmusic search: no match (best_score={best_score})");
+            log::debug!("qqmusic search: no match (best_score={best_score})");
         }
         let mut cache = self.search_cache.lock().await;
         cache.insert(key, CacheEntry::new(value.clone()));
@@ -280,7 +282,7 @@ impl QQMusicSource {
             }
         }
 
-        log::info!("qqmusic fetch lyrics: song_id={song_id} mid={mid}");
+        log::debug!("qqmusic fetch lyrics: song_id={song_id} mid={mid}");
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -377,7 +379,7 @@ impl QQMusicSource {
     }
 
     pub async fn resolve(&self, status: &mut SmtcStatus) -> (LyricResult, MetaInfo) {
-        log::info!("qqmusic resolve: title={:?} artist={:?}", status.title, status.artist);
+        log::debug!("qqmusic resolve: title={:?} artist={:?}", status.title, status.artist);
         let track = TrackInfo {
             title: status.title.clone(),
             artist: status.artist.clone(),

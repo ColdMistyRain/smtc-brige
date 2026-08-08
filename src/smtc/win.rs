@@ -33,124 +33,172 @@ fn parse_ncm_id(genres: &[String]) -> i64 {
 
 // ── Status ──────────────────────────────────────────────────────────────────
 
+/// Maximum time to wait for a single SMTC `TryGetMediaPropertiesAsync` call.
+const MEDIA_PROPS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(4);
+/// Maximum time for the entire SMTC status fetch (manager + all sessions).
+const SMTC_STATUS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// Call `TryGetMediaPropertiesAsync` with a per-session timeout so one stale
+/// session cannot block the whole loop.
+fn try_get_media_properties(
+    session: &windows::Media::Control::GlobalSystemMediaTransportControlsSession,
+) -> Option<windows::Media::Control::GlobalSystemMediaTransportControlsSessionMediaProperties> {
+    let op = session.TryGetMediaPropertiesAsync().ok()?;
+    // Run the blocking WinRT `get()` on a dedicated OS thread and wait with
+    // a deadline.  If the thread hangs we abandon it (rare – only when the
+    // session is in a broken state) but the status loop can continue.
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(op.get().ok());
+    });
+    rx.recv_timeout(MEDIA_PROPS_TIMEOUT)
+        .ok()
+        .flatten()
+        .or_else(|| {
+            log::warn!(
+                "TryGetMediaPropertiesAsync timed out after {}s — skipping session",
+                MEDIA_PROPS_TIMEOUT.as_secs()
+            );
+            None
+        })
+}
+
 pub async fn smtc_status_raw() -> Result<SmtcStatus, String> {
-    let manager = tokio::task::spawn_blocking(|| {
-        GlobalSystemMediaTransportControlsSessionManager::RequestAsync()
-            .map_err(|e| format!("SMTC RequestAsync: {e}"))
-            .and_then(|op| op.get().map_err(|e| format!("SMTC get: {e}")))
-    })
-    .await
-    .map_err(|e| format!("spawn_blocking: {e}"))??;
+    let result = tokio::time::timeout(SMTC_STATUS_TIMEOUT, async {
+        tokio::task::spawn_blocking(|| {
+            let manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()
+                .map_err(|e| format!("SMTC RequestAsync: {e}"))
+                .and_then(|op| op.get().map_err(|e| format!("SMTC get: {e}")))?;
 
-    let current_session = manager.GetCurrentSession().ok();
-    let sessions = manager
-        .GetSessions()
-        .map_err(|e| format!("SMTC GetSessions: {e}"))?;
+            let current_session = manager.GetCurrentSession().ok();
+            let sessions = manager
+                .GetSessions()
+                .map_err(|e| format!("SMTC GetSessions: {e}"))?;
 
-    let count = sessions.Size().map_err(|e| format!("SMTC Size: {e}"))? as i32;
-    if count == 0 {
-        return Ok(SmtcStatus {
-            ok: true,
-            connected: false,
-            state: "none".to_string(),
-            ..Default::default()
-        });
-    }
+            let count = sessions.Size().map_err(|e| format!("SMTC Size: {e}"))? as i32;
+            if count == 0 {
+                return Ok(SmtcStatus {
+                    ok: true,
+                    connected: false,
+                    state: "none".to_string(),
+                    ..Default::default()
+                });
+            }
 
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64;
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as i64;
 
-    let mut best: Option<SmtcStatus> = None;
-    let mut best_score: i32 = -999999;
+            let mut best: Option<SmtcStatus> = None;
+            let mut best_score: i32 = -999999;
 
-    for candidate in sessions.into_iter() {
-        let props = candidate
-            .TryGetMediaPropertiesAsync()
-            .ok()
-            .and_then(|op| op.get().ok());
+            for candidate in sessions.into_iter() {
+                let props = try_get_media_properties(&candidate);
 
-        let playback = candidate.GetPlaybackInfo().ok();
-        let timeline = candidate.GetTimelineProperties().ok();
+                let playback = candidate.GetPlaybackInfo().ok();
+                let timeline = candidate.GetTimelineProperties().ok();
 
-        let is_current = current_session
-            .as_ref()
-            .map(|cs| cs == &candidate)
-            .unwrap_or(false);
+                let is_current = current_session
+                    .as_ref()
+                    .map(|cs| cs == &candidate)
+                    .unwrap_or(false);
 
-        let mut score = 0;
-        let playback_status = playback
-            .as_ref()
-            .and_then(|p| p.PlaybackStatus().ok())
-            .map(|s| playback_status_str(&s).to_string())
-            .unwrap_or_default();
+                let mut score = 0;
+                let playback_status = playback
+                    .as_ref()
+                    .and_then(|p| p.PlaybackStatus().ok())
+                    .map(|s| playback_status_str(&s).to_string())
+                    .unwrap_or_default();
 
-        if playback_status.contains("Playing") { score += 3000; }
-        if is_current { score += 1200; }
+                if playback_status.contains("Playing") { score += 3000; }
+                // Paused/Paused sessions with valid metadata are still useful —
+                // do not penalise them too harshly compared to sessions without
+                // any props.
+                if is_current { score += 1200; }
 
-        let (title, artist, album, album_artist, track_number, genres, ncm_id, duration_ms) =
-            if let Some(ref p) = props {
-                let t = to_string_lossy(&p.Title().unwrap_or_default());
-                let a = to_string_lossy(&p.Artist().unwrap_or_default());
-                let al = to_string_lossy(&p.AlbumTitle().unwrap_or_default());
-                let aa = to_string_lossy(&p.AlbumArtist().unwrap_or_default());
-                let tn = p.TrackNumber().unwrap_or(0);
-                let gs: Vec<String> =
-                    if let Ok(genres) = p.Genres() {
-                        genres.into_iter().map(|g| to_string_lossy(&g)).collect()
-                    } else { vec![] };
-                let nid = parse_ncm_id(&gs);
-                let dur = timeline.as_ref().and_then(|tl| {
-                    let e = tl.EndTime().ok()?.Duration;
-                    let s = tl.StartTime().ok()?.Duration;
-                    Some(((e - s) / 10000).max(0))
-                }).unwrap_or(0);
-                (t, a, al, aa, tn, gs, nid, dur)
-            } else {
-                Default::default()
-            };
+                let (title, artist, album, album_artist, track_number, genres, ncm_id, duration_ms) =
+                    if let Some(ref p) = props {
+                        let t = to_string_lossy(&p.Title().unwrap_or_default());
+                        let a = to_string_lossy(&p.Artist().unwrap_or_default());
+                        let al = to_string_lossy(&p.AlbumTitle().unwrap_or_default());
+                        let aa = to_string_lossy(&p.AlbumArtist().unwrap_or_default());
+                        let tn = p.TrackNumber().unwrap_or(0);
+                        let gs: Vec<String> =
+                            if let Ok(genres) = p.Genres() {
+                                genres.into_iter().map(|g| to_string_lossy(&g)).collect()
+                            } else { vec![] };
+                        let nid = parse_ncm_id(&gs);
+                        let dur = timeline.as_ref().and_then(|tl| {
+                            let e = tl.EndTime().ok()?.Duration;
+                            let s = tl.StartTime().ok()?.Duration;
+                            Some(((e - s) / 10000).max(0))
+                        }).unwrap_or(0);
+                        (t, a, al, aa, tn, gs, nid, dur)
+                    } else {
+                        Default::default()
+                    };
 
-        if ncm_id > 0 { score += 1000; }
-        if duration_ms > 0 { score += 200; }
-        if !album.is_empty() { score += 80; }
-        if !title.is_empty() { score += 20; }
+                if ncm_id > 0 { score += 1000; }
+                if duration_ms > 0 { score += 200; }
+                if !album.is_empty() { score += 80; }
+                if !title.is_empty() { score += 20; }
 
-        if score > best_score {
-            let pos_ticks = timeline.as_ref()
-                .and_then(|tl| tl.Position().ok())
-                .map(|ts| ts.Duration).unwrap_or(0);
-            let position_ms = (pos_ticks / 10000).max(0);
+                if score > best_score {
+                    let pos_ticks = timeline.as_ref()
+                        .and_then(|tl| tl.Position().ok())
+                        .map(|ts| ts.Duration).unwrap_or(0);
+                    let position_ms = (pos_ticks / 10000).max(0);
 
-            best_score = score;
-            best = Some(SmtcStatus {
-                ok: true, connected: true,
-                source: to_string_lossy(&candidate.SourceAppUserModelId().unwrap_or_default()),
-                state: playback_status,
-                title, artist, album, album_artist, track_number,
-                genres, ncm_id,
-                position_ms,
-                duration_ms,
-                session_count: count,
-                selected_current: is_current,
-                updated_at: now_ms,
+                    best_score = score;
+                    best = Some(SmtcStatus {
+                        ok: true, connected: true,
+                        source: to_string_lossy(&candidate.SourceAppUserModelId().unwrap_or_default()),
+                        state: playback_status,
+                        title, artist, album, album_artist, track_number,
+                        genres, ncm_id,
+                        position_ms,
+                        duration_ms,
+                        session_count: count,
+                        selected_current: is_current,
+                        updated_at: now_ms,
+                        ..Default::default()
+                    });
+                }
+            }
+
+            Ok(best.unwrap_or(SmtcStatus {
+                ok: true, connected: false,
+                state: "none".to_string(),
                 ..Default::default()
-            });
+            }))
+        }).await.map_err(|e| format!("spawn_blocking: {e}"))?
+    }).await;
+
+    match result {
+        Ok(Ok(status)) => Ok(status),
+        Ok(Err(e)) => Err(e),
+        Err(_elapsed) => {
+            log::warn!("SMTC status timed out after {}s — returning disconnected",
+                SMTC_STATUS_TIMEOUT.as_secs());
+            Ok(SmtcStatus {
+                ok: true,
+                connected: false,
+                state: "timeout".to_string(),
+                ..Default::default()
+            })
         }
     }
-
-    Ok(best.unwrap_or(SmtcStatus {
-        ok: true, connected: false,
-        state: "none".to_string(),
-        ..Default::default()
-    }))
 }
 
 // ── Control ─────────────────────────────────────────────────────────────────
 
+const CONTROL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 pub async fn smtc_control(action: &str, seek_ms: u64) -> Result<(), String> {
     let action = action.to_string();
-    tokio::task::spawn_blocking(move || -> Result<(), String> {
+    let result = tokio::time::timeout(CONTROL_TIMEOUT, async {
+        tokio::task::spawn_blocking(move || -> Result<(), String> {
         let manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()
             .map_err(|e| format!("SMTC RequestAsync: {e}"))?
             .get().map_err(|e| format!("SMTC get: {e}"))?;
@@ -180,12 +228,25 @@ pub async fn smtc_control(action: &str, seek_ms: u64) -> Result<(), String> {
         }
         Ok(())
     }).await.map_err(|e| format!("spawn_blocking: {e}"))?
+    }).await;
+
+    match result {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => Err(e),
+        Err(_elapsed) => {
+            log::warn!("SMTC control timed out after {}s", CONTROL_TIMEOUT.as_secs());
+            Err("control timed out".to_string())
+        }
+    }
 }
 
 // ── Thumbnail ───────────────────────────────────────────────────────────────
 
+const THUMBNAIL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(6);
+
 pub async fn smtc_thumbnail() -> Result<(Vec<u8>, String), String> {
-    tokio::task::spawn_blocking(|| -> Result<(Vec<u8>, String), String> {
+    let result = tokio::time::timeout(THUMBNAIL_TIMEOUT, async {
+        tokio::task::spawn_blocking(|| -> Result<(Vec<u8>, String), String> {
         let manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()
             .map_err(|e| format!("SMTC RequestAsync: {e}"))?
             .get().map_err(|e| format!("SMTC get: {e}"))?;
@@ -233,4 +294,14 @@ pub async fn smtc_thumbnail() -> Result<(Vec<u8>, String), String> {
         reader.ReadBytes(&mut bytes).map_err(|e| format!("ReadBytes: {e}"))?;
         Ok((bytes, content_type))
     }).await.map_err(|e| format!("spawn_blocking: {e}"))?
+    }).await;
+
+    match result {
+        Ok(Ok(data)) => Ok(data),
+        Ok(Err(e)) => Err(e),
+        Err(_elapsed) => {
+            log::warn!("SMTC thumbnail timed out after {}s", THUMBNAIL_TIMEOUT.as_secs());
+            Err("thumbnail fetch timed out".to_string())
+        }
+    }
 }

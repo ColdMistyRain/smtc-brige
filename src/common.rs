@@ -350,20 +350,16 @@ pub fn maybe_base64_text(value: &str) -> String {
 }
 
 pub fn lyric_at(lines: &[LrcLine], position_ms: u64) -> LyricPosition {
-    let mut index: i32 = -1;
-    for (i, line) in lines.iter().enumerate() {
-        if line.at_ms <= position_ms {
-            index = i as i32;
-        } else {
-            break;
-        }
-    }
+    // Binary search — lines are sorted by at_ms.
+    let i = lines.partition_point(|line| line.at_ms <= position_ms);
+    let index: i32 = if i > 0 { (i - 1) as i32 } else { -1 };
+
     LyricPosition {
         index,
         at_ms: if index >= 0 { lines[index as usize].at_ms } else { 0 },
         next_at_ms: if index >= 0 {
-            let i = index as usize;
-            if i + 1 < lines.len() { lines[i + 1].at_ms } else { 0 }
+            let idx = index as usize;
+            if idx + 1 < lines.len() { lines[idx + 1].at_ms } else { 0 }
         } else {
             0
         },
@@ -373,8 +369,8 @@ pub fn lyric_at(lines: &[LrcLine], position_ms: u64) -> LyricPosition {
             String::new()
         },
         next: if index >= 0 {
-            let i = index as usize;
-            if i + 1 < lines.len() { lines[i + 1].text.clone() } else { String::new() }
+            let idx = index as usize;
+            if idx + 1 < lines.len() { lines[idx + 1].text.clone() } else { String::new() }
         } else {
             String::new()
         },
