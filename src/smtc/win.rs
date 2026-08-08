@@ -2,17 +2,8 @@
 use windows::core::HSTRING;
 use windows::Media::Control::GlobalSystemMediaTransportControlsSessionManager;
 use windows::Storage::Streams::{DataReader, IRandomAccessStreamReference};
-use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 
 use crate::common::SmtcStatus;
-
-fn init_com() -> Result<(), String> {
-    unsafe {
-        CoInitializeEx(None, COINIT_APARTMENTTHREADED)
-            .ok()
-            .map_err(|e| format!("CoInitializeEx: {e}"))
-    }
-}
 
 fn to_string_lossy(h: &HSTRING) -> String {
     h.to_string_lossy()
@@ -32,7 +23,6 @@ fn parse_ncm_id(genres: &[String]) -> i64 {
 
 pub async fn smtc_status_raw() -> Result<SmtcStatus, String> {
     let manager = tokio::task::spawn_blocking(|| {
-        init_com()?;
         GlobalSystemMediaTransportControlsSessionManager::RequestAsync()
             .map_err(|e| format!("SMTC RequestAsync: {e}"))
             .and_then(|op| op.get().map_err(|e| format!("SMTC get: {e}")))
@@ -149,7 +139,6 @@ pub async fn smtc_status_raw() -> Result<SmtcStatus, String> {
 pub async fn smtc_control(action: &str, seek_ms: u64) -> Result<(), String> {
     let action = action.to_string();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
-        init_com()?;
         let manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()
             .map_err(|e| format!("SMTC RequestAsync: {e}"))?
             .get().map_err(|e| format!("SMTC get: {e}"))?;
@@ -185,7 +174,6 @@ pub async fn smtc_control(action: &str, seek_ms: u64) -> Result<(), String> {
 
 pub async fn smtc_thumbnail() -> Result<(Vec<u8>, String), String> {
     tokio::task::spawn_blocking(|| -> Result<(Vec<u8>, String), String> {
-        init_com()?;
         let manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()
             .map_err(|e| format!("SMTC RequestAsync: {e}"))?
             .get().map_err(|e| format!("SMTC get: {e}"))?;
