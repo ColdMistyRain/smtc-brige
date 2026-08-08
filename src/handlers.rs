@@ -326,3 +326,12 @@ pub async fn handle_not_found() -> Response {
 pub async fn handle_catch_all(method: Method) -> Response {
     if method == Method::OPTIONS { handle_options().await } else { handle_not_found().await }
 }
+
+pub async fn handle_shutdown() -> Response {
+    log::info!("shutdown requested");
+    tokio::spawn(async {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        std::process::exit(0);
+    });
+    send_json(&serde_json::json!({"ok":true,"message":"shutting down"}))
+}

@@ -5,6 +5,18 @@ use windows::Storage::Streams::{DataReader, IRandomAccessStreamReference};
 
 use crate::common::SmtcStatus;
 
+fn playback_status_str(status: &windows::Media::Control::GlobalSystemMediaTransportControlsSessionPlaybackStatus) -> &'static str {
+    use windows::Media::Control::GlobalSystemMediaTransportControlsSessionPlaybackStatus as Ps;
+    match *status {
+        Ps::Playing => "Playing",
+        Ps::Paused => "Paused",
+        Ps::Stopped => "Stopped",
+        Ps::Closed => "Closed",
+        Ps::Changing => "Changing",
+        _ => "Unknown",
+    }
+}
+
 fn to_string_lossy(h: &HSTRING) -> String {
     h.to_string_lossy()
 }
@@ -71,7 +83,7 @@ pub async fn smtc_status_raw() -> Result<SmtcStatus, String> {
         let playback_status = playback
             .as_ref()
             .and_then(|p| p.PlaybackStatus().ok())
-            .map(|s| format!("{:?}", s))
+            .map(|s| playback_status_str(&s).to_string())
             .unwrap_or_default();
 
         if playback_status.contains("Playing") { score += 3000; }
@@ -191,7 +203,7 @@ pub async fn smtc_thumbnail() -> Result<(Vec<u8>, String), String> {
             let mut score = 0;
             if let Some(ref pb) = playback {
                 if let Ok(status) = pb.PlaybackStatus() {
-                    if format!("{:?}", status).contains("Playing") { score += 3000; }
+                    if playback_status_str(&status) == "Playing" { score += 3000; }
                 }
             }
             if is_current { score += 1200; }

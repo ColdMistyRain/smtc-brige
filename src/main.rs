@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod common;
 mod config;
 mod handlers;
@@ -6,14 +8,38 @@ mod qqmusic;
 mod smtc;
 mod state;
 
+use std::io;
 use std::sync::Arc;
 use axum::{routing::get, Router};
+use chrono::Local;
+use fern::Dispatch;
 use handlers::*;
 use state::AppState;
 
 #[tokio::main]
 async fn main() {
-    env_logger::init();
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("smtc-bridge.log")
+        .expect("open log file");
+
+    Dispatch::new()
+        .format(|out, message, record| {
+            out.finish(format_args!(
+                "{} [{}] {}",
+                Local::now().format("%Y-%m-%d %H:%M:%S"),
+                record.level(),
+                message
+            ))
+        })
+        .level(log::LevelFilter::Info)
+        .level_for("reqwest", log::LevelFilter::Warn)
+        .chain(io::stderr())
+        .chain(log_file)
+        .apply()
+        .expect("logger init");
+
     let state = Arc::new(AppState::new());
 
     let app = Router::new()
@@ -23,13 +49,12 @@ async fn main() {
         .route("/lyrics", get(handle_lyrics))
         .route("/cover", get(handle_cover))
         .route("/control", get(handle_control).post(handle_control))
+        .route("/shutdown", get(handle_shutdown))
         .fallback(axum::routing::any(handle_catch_all))
         .with_state(state);
 
     let addr = format!("{}:{}", config::HOST, config::PORT);
-    log::info!("SMTC bridge starting on http://{addr}");
-    println!("SMTC bridge listening on http://{addr}");
-    println!("Lyrics: InfLink NCM-{{id}} -> NetEase, QQ Music SMTC -> QQ Music API");
+    log::info!("SMTC bridge listening on http://{addr}");
 
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
