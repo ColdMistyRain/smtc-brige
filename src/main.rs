@@ -187,8 +187,10 @@ async fn enriched_status(state: &AppState, force: bool) -> SmtcStatus {
                 status.cover_url = "/cover?provider=smtc".to_string();
                 // Sync cover_provider / cover_id_text so firmware constructs the correct
                 // /cover?provider=smtc request (firmware uses these fields, not cover_url).
+                // cover_id_text uses a 5-second timestamp bucket so the firmware cache
+                // key changes on song switch (and the server thumbnail cache aligns).
                 status.cover_provider = "smtc".to_string();
-                status.cover_id_text = "current".to_string();
+                status.cover_id_text = format!("{}", status.updated_at / 5000);
 
                 status.ncm_id_text = if status.ncm_id > 0 {
                     status.ncm_id.to_string()
