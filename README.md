@@ -1,65 +1,68 @@
 # SMTC Bridge
 
-Windows 系统媒体控制（SMTC）桥接服务，将当前播放的音乐信息通过 HTTP API 暴露，支持歌词匹配、封面提取和远程控制。
+A Windows System Media Transport Controls (SMTC) bridge service that exposes currently playing music information via HTTP API, with support for lyrics matching, cover art extraction, and remote control.
 
-## 特性
+## Features
 
-- 🎵 **自动检测播放器** — QQ 音乐优先，自动回退网易云搜索
-- 🎤 **歌词匹配** — 网易云 / QQ 音乐双源，自动换行
-- 🖼️ **封面提取** — 直接从 SMTC 缩略图获取，无需外部 CDN
-- 🎮 **远程控制** — 播放/暂停/上下曲/快进快退
-- 🌐 **跨平台编译** — Windows (SMTC) / Linux (MPRIS) / macOS (桩)
-- 📝 **日志文件** — `smtc-bridge.log` 自动记录
+- 🎵 **Auto-detect Player** — QQ Music first, fallback to NetEase Cloud search
+- 🎤 **Lyrics Matching** — Dual-source: NetEase Cloud & QQ Music, with automatic line wrapping
+- 🖼️ **Cover Art Extraction** — Directly from SMTC thumbnail, no external CDN required
+- 🎮 **Remote Control** — Play/Pause/Next/Previous/Seek forward & backward
+- 🌐 **Cross-Platform** — Windows (SMTC) / Linux (MPRIS) / macOS (no-op stub)
+- 📝 **Logging** — Auto-logged to `smtc-bridge.log`
 
-## 快速开始
+## Quick Start
 
-### 安装
+### Installation
 
-下载 [Releases](../../releases) 中的 `smtc-brige.exe`，双击运行即可。
+Download `smtc-brige.exe` from [Releases](../../releases) and double-click to run.
 
-### 开发
+### Development
 
 ```bash
-cargo run          # debug 模式（有控制台）
-cargo build --release  # 发布版（无控制台）
+cargo run                  # debug mode (with console)
+cargo build --release      # release mode (no console window)
 ```
 
-### API
+## API Reference
 
-| 端点 | 说明 |
-|------|------|
-| `GET /status` | 当前播放状态（歌名、歌手、专辑、封面URL、进度） |
-| `GET /lyrics?provider=&id=` | 获取歌词 |
-| `GET /cover?provider=smtc&size=96` | 封面图片（size: 32-512） |
-| `GET /control?action=playpause` | 播放控制（play/pause/next/previous/seek_forward/seek_back） |
-| `GET /shutdown` | 优雅退出 |
+| Endpoint | Description |
+|----------|-------------|
+| `GET /` | Web dashboard page |
+| `GET /health` | Health check |
+| `GET /status` | Current playback status (title, artist, album, cover URL, progress) |
+| `GET /lyrics?provider=&id=` | Fetch lyrics from specified provider |
+| `GET /cover?provider=smtc&size=96` | Cover art image (size: 32–512, defaults to 96) |
+| `GET /control?action=playpause` | Media control command |
+| `GET /shutdown` | Graceful shutdown |
 
-### 常用 action
+### Control Actions
 
-| action | 效果 |
-|--------|------|
-| `play` | 播放 |
-| `pause` | 暂停 |
-| `playpause` | 播放/暂停切换 |
-| `next` | 下一曲 |
-| `previous` | 上一曲 |
-| `seek_forward` | 快进 15 秒 |
-| `seek_back` | 后退 15 秒 |
+| Action | Effect |
+|--------|--------|
+| `play` | Resume playback |
+| `pause` | Pause playback |
+| `playpause` | Toggle play/pause |
+| `next` | Next track |
+| `previous` | Previous track |
+| `seek_forward` | Fast-forward 15 seconds |
+| `seek_back` | Rewind 15 seconds |
 
-## 配置
+## Configuration
 
-环境变量（可选）：
+Optional environment variables:
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `SMTC_BRIDGE_HOST` | `0.0.0.0` | 监听地址 |
-| `SMTC_BRIDGE_PORT` | `17865` | 监听端口 |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SMTC_BRIDGE_HOST` | `0.0.0.0` | Listen address |
+| `SMTC_BRIDGE_PORT` | `17865` | Listen port |
 
-## 技术栈
+## Tech Stack
 
-- **后端**: Rust + axum + tokio
+- **Backend**: Rust + axum + tokio
 - **SMTC**: windows-rs (Windows) / dbus MPRIS (Linux)
-- **歌词源**: 网易云音乐 API / QQ 音乐 API
+- **Lyrics Sources**: NetEase Cloud Music API / QQ Music API
+
 ## License
 
 MIT
