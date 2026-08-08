@@ -468,6 +468,7 @@ async fn handle_cover(
         }
 
         if provider == "smtc" {
+            log::info!("cover: smtc thumbnail requested");
             // Serve cached SMTC thumbnail to avoid overhead.
             let now = Instant::now();
             {
@@ -480,10 +481,17 @@ async fn handle_cover(
             }
 
             let (body, _raw_ct) = smtc_thumbnail().await
-                .map_err(|e| (StatusCode::NOT_FOUND, e))?;
+                .map_err(|e| {
+                    log::error!("cover: smtc_thumbnail failed: {e}");
+                    (StatusCode::NOT_FOUND, e)
+                })?;
             // Upscale to a reasonable size — SMTC thumbnails are often 64x64.
             let resized = resize_cover_jpeg(&body, 200)
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+                .map_err(|e| {
+                    log::error!("cover: resize failed: {e}");
+                    (StatusCode::INTERNAL_SERVER_ERROR, e)
+                })?;
+            log::info!("cover: smtc thumbnail OK, {} bytes -> {} bytes", body.len(), resized.len());
             let mut cache = state.thumbnail_cache.lock().await;
             *cache = Some((now, resized.clone(), "image/jpeg".to_string()));
             return Ok(binary_response(resized, "image/jpeg", false));
