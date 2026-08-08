@@ -1,0 +1,5 @@
+name = SMTC Music
+kind = app
+entry = main.lua
+description = Windows SMTC media display and controls
+version = 0.1.0
