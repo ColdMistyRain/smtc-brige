@@ -183,8 +183,8 @@ async fn enriched_status(state: &AppState, force: bool) -> SmtcStatus {
                 );
 
                 // Cover comes directly from SMTC thumbnail — no external API needed.
-                // Point to our own /cover endpoint so <img> tags can load it.
-                status.cover_url = format!("http://127.0.0.1:{PORT}/cover?provider=smtc");
+                // Relative URL lets the client prepend its own configured host:port.
+                status.cover_url = "/cover?provider=smtc".to_string();
 
                 status.ncm_id_text = if status.ncm_id > 0 {
                     status.ncm_id.to_string()
