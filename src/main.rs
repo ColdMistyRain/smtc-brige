@@ -24,7 +24,7 @@ use common::{
 };
 use netease::NeteaseSource;
 use qqmusic::QQMusicSource;
-use smtc::{smtc_control, smtc_status_raw, smtc_thumbnail};
+use smtc::{resize_cover_jpeg, smtc_control, smtc_status_raw, smtc_thumbnail};
 
 // ── Configuration ───────────────────────────────────────────────────────────
 
@@ -471,12 +471,14 @@ async fn handle_cover(
                 }
             }
 
-            let (body, content_type) = smtc_thumbnail().await
+            let (body, _raw_ct) = smtc_thumbnail().await
                 .map_err(|e| (StatusCode::NOT_FOUND, e))?;
-            let ct = if content_type.is_empty() { "image/jpeg" } else { &content_type };
+            // Upscale to a reasonable size — SMTC thumbnails are often 64x64.
+            let resized = resize_cover_jpeg(&body, 200)
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
             let mut cache = state.thumbnail_cache.lock().await;
-            *cache = Some((now, body.clone(), ct.to_string()));
-            return Ok(binary_response(body, ct, false));
+            *cache = Some((now, resized.clone(), "image/jpeg".to_string()));
+            return Ok(binary_response(resized, "image/jpeg", false));
         }
 
         // Resolve provider aliases ("qq"/"qqartist" -> "qqmusic")
