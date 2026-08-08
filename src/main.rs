@@ -196,7 +196,7 @@ async fn enriched_status(state: &AppState, force: bool) -> SmtcStatus {
                 };
                 status.cover_provider = "smtc".to_string();
                 status.cover_id_text = format!("{cover_id}");
-                status.cover_url = format!("/cover?provider=smtc&id={cover_id}");
+                status.cover_url = format!("/cover?provider=smtc&id={cover_id}&size=96");
 
                 status.ncm_id_text = if status.ncm_id > 0 {
                     status.ncm_id.to_string()
@@ -447,6 +447,8 @@ struct CoverQuery {
     provider: Option<String>,
     id: Option<String>,
     ncm_id: Option<String>,
+    #[serde(default)]
+    size: Option<u32>,
 }
 
 async fn handle_cover(
@@ -468,7 +470,8 @@ async fn handle_cover(
         }
 
         if provider == "smtc" {
-            log::info!("cover: smtc thumbnail requested");
+            let size = params.size.unwrap_or(96).clamp(32, 512);
+            log::info!("cover: smtc thumbnail requested (size={size})");
             // Serve cached SMTC thumbnail to avoid overhead.
             let now = Instant::now();
             {
@@ -485,8 +488,7 @@ async fn handle_cover(
                     log::error!("cover: smtc_thumbnail failed: {e}");
                     (StatusCode::NOT_FOUND, e)
                 })?;
-            // Upscale to a reasonable size — SMTC thumbnails are often 64x64.
-            let resized = resize_cover_jpeg(&body, 200)
+            let resized = resize_cover_jpeg(&body, size)
                 .map_err(|e| {
                     log::error!("cover: resize failed: {e}");
                     (StatusCode::INTERNAL_SERVER_ERROR, e)
