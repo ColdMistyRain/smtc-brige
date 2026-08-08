@@ -1,0 +1,19 @@
+[package]
+name = "smtc-brige"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+axum = "0.7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", features = ["json", "gzip", "deflate", "brotli"] }
+regex = "1"
+base64 = "0.22"
+image = "0.25"
+unicode-normalization = "0.1"
+tower-http = { version = "0.5", features = ["cors"] }
+async-trait = "0.1"
+log = "0.4"
+env_logger = "0.11"
