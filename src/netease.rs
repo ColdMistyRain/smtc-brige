@@ -3,8 +3,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::common::{
-    merge_translation, normalize_text, parse_lrc, search_score, CacheEntry, LyricResult, MetaInfo,
-    SmtcStatus, TrackInfo,
+    merge_translation, normalize_text, parse_lrc, search_score, urlencoding, CacheEntry,
+    LyricResult, MetaInfo, SmtcStatus, TrackInfo, EDGE_UA,
 };
 
 pub struct NeteaseSource {
@@ -34,7 +34,7 @@ impl NeteaseSource {
             search_cache_ms,
             meta_cache_ms,
             client: reqwest::Client::builder()
-                .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0")
+                .user_agent(EDGE_UA)
                 .timeout(std::time::Duration::from_secs(7))
                 .build()
                 .expect("reqwest client"),
@@ -296,20 +296,4 @@ impl NeteaseSource {
         let ncm_id: u64 = id.parse().unwrap_or(0);
         self.fetch_meta(ncm_id).await.cover_url
     }
-}
-
-fn urlencoding(s: &str) -> String {
-    let mut result = String::new();
-    for byte in s.as_bytes() {
-        match *byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                result.push(*byte as char);
-            }
-            b' ' => result.push('+'),
-            _ => {
-                result.push_str(&format!("%{:02X}", byte));
-            }
-        }
-    }
-    result
 }

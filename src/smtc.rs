@@ -81,8 +81,6 @@ pub fn resize_cover_jpeg(buffer: &[u8], size: u32) -> Result<Vec<u8>, String> {
             canvas.color().into(),
         )
         .map_err(|e| format!("jpeg encode: {e}"))?;
-    drop(encoder);
-    drop(cursor);
 
     Ok(buf)
 }

@@ -147,24 +147,42 @@ impl<T> CacheEntry<T> {
     }
 }
 
+// ── Constants ───────────────────────────────────────────────────────────────
+
+pub const EDGE_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0";
+
 // ── LRC Parser ──────────────────────────────────────────────────────────────
 
 static LRC_TIMESTAMP_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]").unwrap()
 });
 
+// ── Precompiled Regexes ────────────────────────────────────────────────────
+
+static ARTIST_SPLIT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\s*(?:/|&|,|，|;|；|\band\b|、)\s*").unwrap());
+static HTML_DEC_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"&#(\d+);").unwrap());
+static HTML_HEX_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"&#x([0-9a-fA-F]+);").unwrap());
+static QQMUSIC_SOURCE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)qqmusic|tencent").unwrap());
+static PLAYBACK_SUFFIX_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\s*[-–—|]\s*(?:qq\s*music|qq音乐|腾讯音乐)\s*$").unwrap()
+});
+static TITLE_ARTIST_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(.+?)\s+[-–—]\s+(.+)$").unwrap());
+
 pub fn parse_lrc(raw: &str) -> Vec<LrcLine> {
     let mut lines: Vec<LrcLine> = Vec::new();
     for line in raw.lines() {
-        let stamps: Vec<_> = LRC_TIMESTAMP_RE.captures_iter(line).collect();
-        if stamps.is_empty() {
-            continue;
-        }
+        // Strip all timestamp brackets to get the lyric text.
         let text = LRC_TIMESTAMP_RE.replace_all(line, "").trim().to_string();
         if text.is_empty() {
             continue;
         }
-        for caps in stamps {
+        let mut has_stamps = false;
+        for caps in LRC_TIMESTAMP_RE.captures_iter(line) {
+            has_stamps = true;
             let min: u64 = caps.get(1).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
             let sec: u64 = caps.get(2).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
             let frac_str = caps.get(3).map(|m| m.as_str()).unwrap_or("0");
@@ -174,6 +192,9 @@ pub fn parse_lrc(raw: &str) -> Vec<LrcLine> {
                 at_ms,
                 text: text.clone(),
             });
+        }
+        if !has_stamps {
+            continue;
         }
     }
     lines.sort_by_key(|l| l.at_ms);
@@ -224,8 +245,8 @@ pub fn normalize_text(value: &str) -> String {
 }
 
 pub fn split_artists(value: &str) -> Vec<String> {
-    let re = Regex::new(r"\s*(?:/|&|,|，|;|；|\band\b|、)\s*").unwrap();
-    re.split(&normalize_text(value))
+    ARTIST_SPLIT_RE
+        .split(&normalize_text(value))
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect()
@@ -249,18 +270,21 @@ pub fn search_score(
         score += 45;
     }
 
+    // Pre-normalize song artists so each is only normalised once.
+    let song_artists_norm: Vec<String> = song_artists
+        .iter()
+        .map(|a| normalize_text(a))
+        .collect();
+
     // Match JS behaviour: for each expected artist, add score at most once
     // (exact match takes precedence over partial for that expected artist).
     for expected in split_artists(&artist) {
-        let exact_match = song_artists
-            .iter()
-            .any(|actual| normalize_text(actual) == expected);
+        let exact_match = song_artists_norm.iter().any(|actual| *actual == expected);
         if exact_match {
             score += 30;
         } else {
-            let partial_match = song_artists.iter().any(|actual| {
-                let actual_norm = normalize_text(actual);
-                actual_norm.contains(&expected) || expected.contains(&actual_norm)
+            let partial_match = song_artists_norm.iter().any(|actual| {
+                actual.contains(&expected) || expected.contains(actual)
             });
             if partial_match {
                 score += 15;
@@ -281,9 +305,6 @@ pub fn search_score(
 }
 
 pub fn decode_html(value: &str) -> String {
-    let re_dec = Regex::new(r"&#(\d+);").unwrap();
-    let re_hex = Regex::new(r"&#x([0-9a-fA-F]+);").unwrap();
-
     let result = value
         .replace("\\n", "\n")
         .replace("&apos;", "'")
@@ -292,14 +313,14 @@ pub fn decode_html(value: &str) -> String {
         .replace("&gt;", ">")
         .replace("&amp;", "&");
 
-    let result = re_dec
+    let result = HTML_DEC_RE
         .replace_all(&result, |caps: &regex::Captures| {
             let code: u32 = caps[1].parse().unwrap_or(0);
             char::from_u32(code).unwrap_or('\0').to_string()
         })
         .into_owned();
 
-    re_hex
+    HTML_HEX_RE
         .replace_all(&result, |caps: &regex::Captures| {
             let code = u32::from_str_radix(&caps[1], 16).unwrap_or(0);
             char::from_u32(code).unwrap_or('\0').to_string()
@@ -359,13 +380,12 @@ pub fn lyric_at(lines: &[LrcLine], position_ms: u64) -> LyricPosition {
 }
 
 pub fn is_qqmusic_source(source: &str) -> bool {
-    let re = Regex::new(r"(?i)qqmusic|tencent").unwrap();
-    re.is_match(source)
+    QQMUSIC_SOURCE_RE.is_match(source)
 }
 
 pub fn strip_playback_suffix(value: &str) -> String {
-    let re = Regex::new(r"(?i)\s*[-–—|]\s*(?:qq\s*music|qq音乐|腾讯音乐)\s*$").unwrap();
-    re.replace(value, "")
+    PLAYBACK_SUFFIX_RE
+        .replace(value, "")
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
@@ -379,11 +399,27 @@ pub fn infer_track_metadata(status: &mut SmtcStatus) {
     status.album = strip_playback_suffix(&status.album);
 
     if status.artist.is_empty() && is_qqmusic_source(&status.source) {
-        let re = Regex::new(r"^(.+?)\s+[-–—]\s+(.+)$").unwrap();
         let title_snapshot = status.title.clone();
-        if let Some(caps) = re.captures(&title_snapshot) {
+        if let Some(caps) = TITLE_ARTIST_RE.captures(&title_snapshot) {
             status.title = strip_playback_suffix(&caps[1]);
             status.artist = strip_playback_suffix(&caps[2]);
         }
     }
+}
+
+/// Percent-encode a string (same logic in JS `encodeURIComponent`).
+pub fn urlencoding(s: &str) -> String {
+    let mut result = String::new();
+    for byte in s.as_bytes() {
+        match *byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                result.push(*byte as char);
+            }
+            b' ' => result.push('+'),
+            _ => {
+                result.push_str(&format!("%{:02X}", byte));
+            }
+        }
+    }
+    result
 }

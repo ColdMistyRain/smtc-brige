@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use tokio::sync::Mutex;
 
 use crate::common::{
     decode_html, maybe_base64_text, merge_translation, normalize_text, parse_lrc, search_score,
-    split_artists, CacheEntry, LyricResult, MetaInfo, SmtcStatus, TrackInfo,
+    split_artists, urlencoding, CacheEntry, LyricResult, MetaInfo, SmtcStatus, TrackInfo, EDGE_UA,
 };
 
 // ── QQ Cover URL helpers ────────────────────────────────────────────────────
@@ -14,7 +15,7 @@ fn qq_cover_url(album_mid: &str, size: u32) -> String {
     if mid.is_empty() {
         return String::new();
     }
-    let encoded = urlencoding_qq(mid);
+    let encoded = urlencoding(mid);
     format!("https://y.qq.com/music/photo_new/T002R{size}x{size}M000{encoded}.jpg?max_age=2592000")
 }
 
@@ -23,7 +24,7 @@ fn qq_singer_cover_url(singer_mid: &str, size: u32) -> String {
     if mid.is_empty() {
         return String::new();
     }
-    let encoded = urlencoding_qq(mid);
+    let encoded = urlencoding(mid);
     format!("https://y.qq.com/music/photo_new/T001R{size}x{size}M000{encoded}.jpg?max_age=2592000")
 }
 
@@ -41,6 +42,13 @@ pub struct QQSong {
     pub singer_mid: String,
     pub cover_url: String,
 }
+
+// ── Precompiled Regexes ────────────────────────────────────────────────────
+
+static QQMUSIC_MATCH_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"(?i)qqmusic|tencent").unwrap());
+static JSONP_CALLBACK_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"^[\w$.]+\(([\s\S]*)\)\s*;?$").unwrap());
 
 // ── QQMusic Source ──────────────────────────────────────────────────────────
 
@@ -71,7 +79,7 @@ impl QQMusicSource {
             search_cache_ms,
             meta_cache_ms,
             client: reqwest::Client::builder()
-                .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0")
+                .user_agent(EDGE_UA)
                 .timeout(std::time::Duration::from_secs(9))
                 .build()
                 .expect("reqwest client"),
@@ -80,8 +88,7 @@ impl QQMusicSource {
 
     #[allow(dead_code)]
     pub fn matches(&self, status: &SmtcStatus) -> bool {
-        let re = regex::Regex::new(r"(?i)qqmusic|tencent").unwrap();
-        re.is_match(&status.source)
+        QQMUSIC_MATCH_RE.is_match(&status.source)
     }
 
     async fn normalize_song(&self, song: &serde_json::Value) -> Option<QQSong> {
@@ -182,7 +189,7 @@ impl QQMusicSource {
             }
         }
 
-        let query = urlencoding_qq(&format!("{title} {artist}"));
+        let query = urlencoding(&format!("{title} {artist}"));
         let endpoints = [
             format!("https://c.y.qq.com/soso/fcgi-bin/client_search_cp?ct=24&qqmusic_ver=1298&new_json=1&remoteplace=txt.yqq.song&searchid=1&t=0&aggr=1&cr=1&catZhida=1&lossless=0&flag_qc=0&p=1&n=8&w={query}&format=json&platform=yqq.json&needNewCode=0"),
             format!("https://c.y.qq.com/soso/fcgi-bin/search_cp?g_tk=5381&uin=0&format=json&inCharset=utf-8&outCharset=utf-8&notice=0&platform=yqq&needNewCode=0&w={query}&zhidaqu=1&catZhida=1&t=0&flag=1&ie=utf-8&sem=1&aggr=0&perpage=8&n=8&p=1&remoteplace=txt.mqq.all"),
@@ -397,19 +404,7 @@ impl QQMusicSource {
                 "current".to_string()
             };
 
-            // Update meta cache
-            {
-                let mut cache = self.meta_cache.lock().await;
-                if qq.id > 0 {
-                    cache.insert(format!("id:{}", qq.id), CacheEntry::new(qq.clone()));
-                }
-                if !qq.mid.is_empty() {
-                    cache.insert(format!("mid:{}", qq.mid), CacheEntry::new(qq.clone()));
-                }
-                if !qq.album_mid.is_empty() {
-                    cache.insert(format!("album:{}", qq.album_mid), CacheEntry::new(qq.clone()));
-                }
-            }
+            // Meta cache already populated by normalize_song; no need to re-insert here.
 
             let found = self.fetch_lyrics(qq.id, &qq.mid).await;
             let cover_url = if qq.cover_url.is_empty() {
@@ -462,27 +457,10 @@ impl QQMusicSource {
 fn parse_loose_json(raw: &str) -> Result<serde_json::Value, serde_json::Error> {
     let text = raw.trim();
     // Strip JSONP callback wrapper: callback({...});
-    let re = regex::Regex::new(r"^[\w$.]+\(([\s\S]*)\)\s*;?$").unwrap();
-    let text = if let Some(caps) = re.captures(text) {
+    let text = if let Some(caps) = JSONP_CALLBACK_RE.captures(text) {
         caps[1].to_string()
     } else {
         text.to_string()
     };
     serde_json::from_str(&text)
-}
-
-fn urlencoding_qq(s: &str) -> String {
-    let mut result = String::new();
-    for byte in s.as_bytes() {
-        match *byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                result.push(*byte as char);
-            }
-            b' ' => result.push('+'),
-            _ => {
-                result.push_str(&format!("%{:02X}", byte));
-            }
-        }
-    }
-    result
 }

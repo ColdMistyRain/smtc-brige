@@ -15,6 +15,7 @@ use axum::{
     routing::get,
     Router,
 };
+use base64::Engine;
 use serde::Deserialize;
 use tokio::sync::Mutex;
 
@@ -35,7 +36,7 @@ const LYRIC_CACHE_MS: u64 = 6 * 60 * 60 * 1000;
 const SEARCH_CACHE_MS: u64 = 60 * 60 * 1000;
 const META_CACHE_MS: u64 = 6 * 60 * 60 * 1000;
 
-const EDGE_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0";
+const EDGE_UA: &str = common::EDGE_UA;
 
 // ── Application State ───────────────────────────────────────────────────────
 
@@ -254,16 +255,7 @@ async fn fetch_first_buffer(
 // ── JSON Helpers ────────────────────────────────────────────────────────────
 
 fn send_json<T: serde::Serialize>(value: &T) -> Response {
-    let body = serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string());
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
-        .header(header::CACHE_CONTROL, "no-store")
-        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-        .header(header::ACCESS_CONTROL_ALLOW_METHODS, "GET, POST, OPTIONS")
-        .header(header::ACCESS_CONTROL_ALLOW_HEADERS, "content-type")
-        .body(Body::from(body))
-        .unwrap()
+    json_response(StatusCode::OK, value)
 }
 
 fn json_response<T: serde::Serialize>(status: StatusCode, value: &T) -> Response {
@@ -439,7 +431,6 @@ async fn handle_cover(
             if !thumb.ok || thumb.base64.is_empty() {
                 return Err((StatusCode::NOT_FOUND, thumb.error));
             }
-            use base64::Engine;
             let body = base64::engine::general_purpose::STANDARD
                 .decode(&thumb.base64)
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("base64: {e}")))?;
