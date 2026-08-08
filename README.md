@@ -66,8 +66,6 @@ cargo build --release  # 发布版（无控制台）
 - **后端**: Rust + axum + tokio
 - **SMTC**: windows-rs (Windows) / dbus MPRIS (Linux)
 - **歌词源**: 网易云音乐 API / QQ 音乐 API
-- **字体**: lv_font_conv + LXGW WenKai / SimHei
-
 ## License
 
 MIT
