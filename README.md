@@ -55,12 +55,6 @@ cargo build --release  # 发布版（无控制台）
 | `SMTC_BRIDGE_HOST` | `0.0.0.0` | 监听地址 |
 | `SMTC_BRIDGE_PORT` | `17865` | 监听端口 |
 
-## 固件
-
-`固件/` 目录包含 ESP32 设备端 Lua 脚本（HoloCubic 兼容），通过 WiFi 连接本服务显示歌词和封面。
-
-`gen-font.bat` — LVGL 字体生成脚本（需 Node.js）。
-
 ## 技术栈
 
 - **后端**: Rust + axum + tokio
