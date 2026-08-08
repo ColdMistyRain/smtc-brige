@@ -185,9 +185,18 @@ async fn enriched_status(state: &AppState, force: bool) -> SmtcStatus {
                 // Cover comes directly from SMTC thumbnail — no external API needed.
                 // Sync cover_url / cover_provider / cover_id_text so firmware
                 // constructs the correct /cover?provider=smtc&id=... request.
+                // cover_id_text is a stable hash of title+artist so the firmware
+                // cache key doesn't change for the same song.
+                let cover_id = {
+                    use std::hash::{Hash, Hasher};
+                    let mut h = std::collections::hash_map::DefaultHasher::new();
+                    status.title.hash(&mut h);
+                    status.artist.hash(&mut h);
+                    h.finish()
+                };
                 status.cover_provider = "smtc".to_string();
-                status.cover_id_text = format!("{}", status.updated_at / 5000);
-                status.cover_url = format!("/cover?provider=smtc&id={}", status.cover_id_text);
+                status.cover_id_text = format!("{cover_id}");
+                status.cover_url = format!("/cover?provider=smtc&id={cover_id}");
 
                 status.ncm_id_text = if status.ncm_id > 0 {
                     status.ncm_id.to_string()
