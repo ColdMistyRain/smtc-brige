@@ -1,4 +1,4 @@
-﻿use image::codecs::jpeg::JpegEncoder;
+use image::codecs::jpeg::JpegEncoder;
 use std::io::Cursor;
 
 // ── Cover Resize (cross-platform) ───────────────────────────────────────────
@@ -24,7 +24,13 @@ pub fn resize_cover_jpeg(buffer: &[u8], size: u32) -> Result<Vec<u8>, String> {
     let mut buf = Vec::new();
     let mut cursor = Cursor::new(&mut buf);
     let mut encoder = JpegEncoder::new_with_quality(&mut cursor, 90);
-    encoder.encode(canvas.as_bytes(), canvas.width(), canvas.height(), canvas.color().into())
+    encoder
+        .encode(
+            canvas.as_bytes(),
+            canvas.width(),
+            canvas.height(),
+            canvas.color().into(),
+        )
         .map_err(|e| format!("jpeg encode: {e}"))?;
 
     Ok(buf)

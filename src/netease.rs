@@ -2,10 +2,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use async_trait::async_trait;
+
 use crate::common::{
     cache_insert_limited, merge_translation, normalize_text, parse_lrc, search_score, sweep_cache,
     urlencoding, CacheEntry, LyricResult, MetaInfo, SmtcStatus, TrackInfo, MAX_CACHE_ENTRIES,
 };
+use crate::source::MusicSource;
 
 pub struct NeteaseSource {
     pub lyric_cache: Arc<Mutex<HashMap<u64, CacheEntry<LyricResult>>>>,
@@ -84,9 +87,7 @@ impl NeteaseSource {
                                 .as_array()
                                 .map(|arr| {
                                     arr.iter()
-                                        .filter_map(|a| {
-                                            a["name"].as_str().map(|n| n.to_string())
-                                        })
+                                        .filter_map(|a| a["name"].as_str().map(|n| n.to_string()))
                                         .collect()
                                 })
                                 .unwrap_or_default();
@@ -109,11 +110,17 @@ impl NeteaseSource {
         let id = if best_score >= 45 { best_id } else { 0 };
         log::debug!("netease search result: id={id} score={best_score}");
         let mut cache = self.search_cache.lock().await;
-        cache_insert_limited(&mut cache, key, CacheEntry::new(id), self.search_cache_ms, MAX_CACHE_ENTRIES);
+        cache_insert_limited(
+            &mut cache,
+            key,
+            CacheEntry::new(id),
+            self.search_cache_ms,
+            MAX_CACHE_ENTRIES,
+        );
         id
     }
 
-    pub async fn fetch_lyrics(&self, ncm_id: u64) -> LyricResult {
+    pub async fn fetch_lyrics(&self, ncm_id: u64, _mid: &str) -> LyricResult {
         if ncm_id == 0 {
             return LyricResult {
                 source: String::new(),
@@ -149,28 +156,32 @@ impl NeteaseSource {
             .send()
             .await
         {
-            Ok(resp) => {
-                match resp.json::<serde_json::Value>().await {
-                    Ok(doc) => {
-                        let primary = parse_lrc(doc["lrc"]["lyric"].as_str().unwrap_or(""));
-                        let translated = parse_lrc(doc["tlyric"]["lyric"].as_str().unwrap_or(""));
-                        let translation_count = translated.len();
-                        let lines = merge_translation(&primary, &translated);
-                        result.translation_line_count = translation_count;
-                        result.lines = lines;
-                    }
-                    Err(e) => {
-                        log::warn!("NetEase lyric JSON parse error for id={ncm_id}: {e}");
-                    }
+            Ok(resp) => match resp.json::<serde_json::Value>().await {
+                Ok(doc) => {
+                    let primary = parse_lrc(doc["lrc"]["lyric"].as_str().unwrap_or(""));
+                    let translated = parse_lrc(doc["tlyric"]["lyric"].as_str().unwrap_or(""));
+                    let translation_count = translated.len();
+                    let lines = merge_translation(&primary, &translated);
+                    result.translation_line_count = translation_count;
+                    result.lines = lines;
                 }
-            }
+                Err(e) => {
+                    log::warn!("NetEase lyric JSON parse error for id={ncm_id}: {e}");
+                }
+            },
             Err(e) => {
                 log::warn!("NetEase lyric HTTP error for id={ncm_id}: {e}");
             }
         }
 
         let mut cache = self.lyric_cache.lock().await;
-        cache_insert_limited(&mut cache, ncm_id, CacheEntry::new(result.clone()), self.lyric_cache_ms, MAX_CACHE_ENTRIES);
+        cache_insert_limited(
+            &mut cache,
+            ncm_id,
+            CacheEntry::new(result.clone()),
+            self.lyric_cache_ms,
+            MAX_CACHE_ENTRIES,
+        );
         result
     }
 
@@ -208,18 +219,16 @@ impl NeteaseSource {
                         if let Some(songs) = doc["songs"].as_array() {
                             if let Some(song) = songs.first() {
                                 // JS: song?.album || song?.al || {}
-                                let album = song["album"]
-                                    .as_object()
-                                    .or_else(|| song["al"].as_object());
+                                let album =
+                                    song["album"].as_object().or_else(|| song["al"].as_object());
 
                                 let cover_raw = album
                                     .and_then(|a| a["picUrl"].as_str())
                                     .or_else(|| album.and_then(|a| a["pic"].as_str()))
                                     .unwrap_or("");
 
-                                let album_name = album
-                                    .and_then(|a| a["name"].as_str())
-                                    .unwrap_or("");
+                                let album_name =
+                                    album.and_then(|a| a["name"].as_str()).unwrap_or("");
 
                                 meta = MetaInfo {
                                     id: ncm_id,
@@ -250,7 +259,13 @@ impl NeteaseSource {
         }
 
         let mut cache = self.meta_cache.lock().await;
-        cache_insert_limited(&mut cache, ncm_id, CacheEntry::new(meta.clone()), self.meta_cache_ms, MAX_CACHE_ENTRIES);
+        cache_insert_limited(
+            &mut cache,
+            ncm_id,
+            CacheEntry::new(meta.clone()),
+            self.meta_cache_ms,
+            MAX_CACHE_ENTRIES,
+        );
         meta
     }
 
@@ -270,7 +285,7 @@ impl NeteaseSource {
             status.ncm_id = ncm_id as i64;
         }
 
-        let found = self.fetch_lyrics(ncm_id).await;
+        let found = self.fetch_lyrics(ncm_id, "").await;
         let meta = self.fetch_meta(ncm_id).await;
 
         status.lyric_provider = "netease".to_string();
@@ -292,17 +307,52 @@ impl NeteaseSource {
             format!("{}:{source_hint}", found.source)
         };
 
-        (
-            LyricResult {
-                source,
-                ..found
-            },
-            meta,
-        )
+        (LyricResult { source, ..found }, meta)
     }
 
     pub async fn cover_candidates(&self, id: &str) -> String {
         let ncm_id: u64 = id.parse().unwrap_or(0);
         self.fetch_meta(ncm_id).await.cover_url
+    }
+}
+
+#[async_trait]
+impl MusicSource for NeteaseSource {
+    fn name(&self) -> &'static str {
+        "netease"
+    }
+
+    async fn resolve(&self, status: &mut SmtcStatus) -> (LyricResult, MetaInfo) {
+        NeteaseSource::resolve(self, status).await
+    }
+
+    async fn fetch_lyrics(&self, id: u64, mid: &str) -> LyricResult {
+        NeteaseSource::fetch_lyrics(self, id, mid).await
+    }
+
+    async fn sweep_caches(&self) -> usize {
+        let mut removed = 0;
+        {
+            let mut c = self.lyric_cache.lock().await;
+            let before = c.len();
+            sweep_cache(&mut c, self.lyric_cache_ms);
+            removed += before - c.len();
+        }
+        {
+            let mut c = self.search_cache.lock().await;
+            let before = c.len();
+            sweep_cache(&mut c, self.search_cache_ms);
+            removed += before - c.len();
+        }
+        {
+            let mut c = self.meta_cache.lock().await;
+            let before = c.len();
+            sweep_cache(&mut c, self.meta_cache_ms);
+            removed += before - c.len();
+        }
+        if removed > 0 {
+            log::debug!("netease caches swept: removed {removed} entries");
+        }
+        removed
     }
 }

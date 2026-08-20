@@ -6,15 +6,17 @@ mod handlers;
 mod netease;
 mod qqmusic;
 mod smtc;
+mod source;
 mod state;
 
-use std::io;
-use std::sync::Arc;
 use axum::{routing::get, Router};
 use chrono::Local;
 use fern::Dispatch;
 use handlers::*;
 use state::AppState;
+use std::io;
+use std::sync::Arc;
+use tower_http::cors::CorsLayer;
 
 #[tokio::main]
 async fn main() {
@@ -29,8 +31,10 @@ async fn main() {
             if let Err(e) = std::fs::rename(LOG_PATH, &backup) {
                 eprintln!("log rotation failed: {e}");
             } else {
-                eprintln!("rotated {LOG_PATH} -> {backup} ({:.1} MiB)",
-                    meta.len() as f64 / (1024.0 * 1024.0));
+                eprintln!(
+                    "rotated {LOG_PATH} -> {backup} ({:.1} MiB)",
+                    meta.len() as f64 / (1024.0 * 1024.0)
+                );
             }
         }
     }
@@ -57,7 +61,8 @@ async fn main() {
         .apply()
         .expect("logger init");
 
-    let state = Arc::new(AppState::new());
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let state = Arc::new(AppState::new(shutdown_tx));
 
     // ── Background cache sweeper ─────────────────────────────────────────
     {
@@ -81,11 +86,30 @@ async fn main() {
         .route("/control", get(handle_control).post(handle_control))
         .route("/shutdown", get(handle_shutdown))
         .fallback(axum::routing::any(handle_catch_all))
-        .with_state(state);
+        .with_state(state)
+        // Central CORS handling (replaces the per-response headers).
+        .layer(CorsLayer::permissive());
 
-    let addr = format!("{}:{}", config::HOST, config::PORT);
-    log::info!("SMTC bridge listening on http://{addr}");
+    let addr = format!("{}:{}", config::HOST.as_str(), *config::PORT);
+    // Print 127.0.0.1 for wildcard binds so the URL can be copy-pasted into a
+    // browser; the service itself keeps listening on the configured address.
+    let display_host = if config::HOST.as_str() == "0.0.0.0" || config::HOST.as_str() == "::" {
+        "127.0.0.1"
+    } else {
+        config::HOST.as_str()
+    };
+    log::info!(
+        "SMTC bridge listening on http://{display_host}:{}",
+        *config::PORT
+    );
 
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            let mut rx = shutdown_rx;
+            let _ = rx.wait_for(|v| *v).await;
+            log::info!("shutdown signal received — draining connections…");
+        })
+        .await
+        .unwrap();
 }

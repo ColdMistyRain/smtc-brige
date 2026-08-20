@@ -54,7 +54,7 @@ Optional environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SMTC_BRIDGE_HOST` | `0.0.0.0` | Listen address |
+| `SMTC_BRIDGE_HOST` | `0.0.0.0` | Listen address (shown as `127.0.0.1` in the log for copy-paste) |
 | `SMTC_BRIDGE_PORT` | `17865` | Listen port |
 
 ## Tech Stack
@@ -73,7 +73,7 @@ MIT
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `SMTC_BRIDGE_HOST` | `0.0.0.0` | 监听地址 |
+| `SMTC_BRIDGE_HOST` | `0.0.0.0` | 监听地址（日志中显示为 `127.0.0.1`，可直接复制打开） |
 | `SMTC_BRIDGE_PORT` | `17865` | 监听端口 |
 
 ## 技术栈

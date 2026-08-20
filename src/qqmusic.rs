@@ -3,11 +3,14 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 use tokio::sync::Mutex;
 
+use async_trait::async_trait;
+
 use crate::common::{
     cache_insert_limited, decode_html, maybe_base64_text, merge_translation, normalize_text,
     parse_lrc, search_score, split_artists, sweep_cache, urlencoding, CacheEntry, LyricResult,
     MetaInfo, SmtcStatus, TrackInfo, MAX_CACHE_ENTRIES,
 };
+use crate::source::MusicSource;
 
 // ── QQ Cover URL helpers ────────────────────────────────────────────────────
 
@@ -70,7 +73,9 @@ impl QQMusicSource {
         meta_cache: Arc<Mutex<HashMap<String, CacheEntry<QQSong>>>>,
         lyric_cache_ms: u64,
         search_cache_ms: u64,
-        meta_cache_ms: u64,        client: reqwest::Client,    ) -> Self {
+        meta_cache_ms: u64,
+        client: reqwest::Client,
+    ) -> Self {
         Self {
             lyric_cache,
             search_cache,
@@ -88,7 +93,10 @@ impl QQMusicSource {
     }
 
     async fn normalize_song(&self, song: &serde_json::Value) -> Option<QQSong> {
-        let singer = song["singer"].as_array().map(|a| a.as_slice()).unwrap_or(&[]);
+        let singer = song["singer"]
+            .as_array()
+            .map(|a| a.as_slice())
+            .unwrap_or(&[]);
         let album = &song["album"];
 
         let id = song["songid"]
@@ -155,13 +163,31 @@ impl QQMusicSource {
         {
             let mut cache = self.meta_cache.lock().await;
             if id > 0 {
-                cache_insert_limited(&mut cache, format!("id:{id}"), entry.clone(), self.meta_cache_ms, MAX_CACHE_ENTRIES);
+                cache_insert_limited(
+                    &mut cache,
+                    format!("id:{id}"),
+                    entry.clone(),
+                    self.meta_cache_ms,
+                    MAX_CACHE_ENTRIES,
+                );
             }
             if !mid.is_empty() {
-                cache_insert_limited(&mut cache, format!("mid:{mid}"), entry.clone(), self.meta_cache_ms, MAX_CACHE_ENTRIES);
+                cache_insert_limited(
+                    &mut cache,
+                    format!("mid:{mid}"),
+                    entry.clone(),
+                    self.meta_cache_ms,
+                    MAX_CACHE_ENTRIES,
+                );
             }
             if !album_mid.is_empty() {
-                cache_insert_limited(&mut cache, format!("album:{album_mid}"), entry, self.meta_cache_ms, MAX_CACHE_ENTRIES);
+                cache_insert_limited(
+                    &mut cache,
+                    format!("album:{album_mid}"),
+                    entry,
+                    self.meta_cache_ms,
+                    MAX_CACHE_ENTRIES,
+                );
             }
         }
 
@@ -189,9 +215,16 @@ impl QQMusicSource {
 
         log::debug!("qqmusic search: title={title:?} artist={artist:?}");
         let query = urlencoding(&format!("{title} {artist}"));
+        let title_query = urlencoding(title);
+        // NOTE: c.y.qq.com's full parameter set (ct=24&qqmusic_ver=...&aggr=1&...)
+        // currently returns 0 results for every query, which made every QQ
+        // search fail and forced a slow NetEase fallback.  The minimal
+        // `format=json&platform=yqq.json&w=...` query works reliably.
         let endpoints = [
-            format!("https://c.y.qq.com/soso/fcgi-bin/client_search_cp?ct=24&qqmusic_ver=1298&new_json=1&remoteplace=txt.yqq.song&searchid=1&t=0&aggr=1&cr=1&catZhida=1&lossless=0&flag_qc=0&p=1&n=8&w={query}&format=json&platform=yqq.json&needNewCode=0"),
-            format!("https://c.y.qq.com/soso/fcgi-bin/search_cp?g_tk=5381&uin=0&format=json&inCharset=utf-8&outCharset=utf-8&notice=0&platform=yqq&needNewCode=0&w={query}&zhidaqu=1&catZhida=1&t=0&flag=1&ie=utf-8&sem=1&aggr=0&perpage=8&n=8&p=1&remoteplace=txt.mqq.all"),
+            // Full query (title + artist).
+            format!("https://c.y.qq.com/soso/fcgi-bin/client_search_cp?format=json&platform=yqq.json&w={query}&n=8&p=1"),
+            // Fallback: title only (some titles match poorly with artist).
+            format!("https://c.y.qq.com/soso/fcgi-bin/client_search_cp?format=json&platform=yqq.json&w={title_query}&n=8&p=1"),
         ];
 
         let mut songs: Vec<serde_json::Value> = vec![];
@@ -238,12 +271,22 @@ impl QQMusicSource {
 
         let value = best.filter(|_| best_score >= 45);
         if let Some(ref song) = value {
-            log::debug!("qqmusic search result: id={} mid={} score={best_score}", song.id, song.mid);
+            log::debug!(
+                "qqmusic search result: id={} mid={} score={best_score}",
+                song.id,
+                song.mid
+            );
         } else {
             log::debug!("qqmusic search: no match (best_score={best_score})");
         }
         let mut cache = self.search_cache.lock().await;
-        cache_insert_limited(&mut cache, key, CacheEntry::new(value.clone()), self.search_cache_ms, MAX_CACHE_ENTRIES);
+        cache_insert_limited(
+            &mut cache,
+            key,
+            CacheEntry::new(value.clone()),
+            self.search_cache_ms,
+            MAX_CACHE_ENTRIES,
+        );
         value
     }
 
@@ -266,7 +309,14 @@ impl QQMusicSource {
             };
         }
 
-        let cache_key = format!("qq:{}", if song_id > 0 { song_id.to_string() } else { mid.clone() });
+        let cache_key = format!(
+            "qq:{}",
+            if song_id > 0 {
+                song_id.to_string()
+            } else {
+                mid.clone()
+            }
+        );
         {
             let mut cache = self.lyric_cache.lock().await;
             if let Some(entry) = cache.get(&cache_key) {
@@ -334,9 +384,8 @@ impl QQMusicSource {
             {
                 if let Ok(text) = resp.text().await {
                     if let Ok(doc) = parse_loose_json(&text) {
-                        let lyric_raw = decode_html(&maybe_base64_text(
-                            doc["lyric"].as_str().unwrap_or(""),
-                        ));
+                        let lyric_raw =
+                            decode_html(&maybe_base64_text(doc["lyric"].as_str().unwrap_or("")));
                         let trans_raw = decode_html(&maybe_base64_text(
                             doc["trans"]
                                 .as_str()
@@ -351,12 +400,25 @@ impl QQMusicSource {
 
                         if !lines.is_empty() {
                             let value = LyricResult {
-                                source: format!("qqmusic:{}", if song_id > 0 { song_id.to_string() } else { mid.clone() }),
+                                source: format!(
+                                    "qqmusic:{}",
+                                    if song_id > 0 {
+                                        song_id.to_string()
+                                    } else {
+                                        mid.clone()
+                                    }
+                                ),
                                 translation_line_count: translation_count,
                                 lines,
                             };
                             let mut cache = self.lyric_cache.lock().await;
-                            cache_insert_limited(&mut cache, cache_key, CacheEntry::new(value.clone()), self.lyric_cache_ms, MAX_CACHE_ENTRIES);
+                            cache_insert_limited(
+                                &mut cache,
+                                cache_key,
+                                CacheEntry::new(value.clone()),
+                                self.lyric_cache_ms,
+                                MAX_CACHE_ENTRIES,
+                            );
                             return value;
                         }
                     }
@@ -370,12 +432,22 @@ impl QQMusicSource {
             lines: vec![],
         };
         let mut cache = self.lyric_cache.lock().await;
-        cache_insert_limited(&mut cache, cache_key, CacheEntry::new(value.clone()), self.lyric_cache_ms, MAX_CACHE_ENTRIES);
+        cache_insert_limited(
+            &mut cache,
+            cache_key,
+            CacheEntry::new(value.clone()),
+            self.lyric_cache_ms,
+            MAX_CACHE_ENTRIES,
+        );
         value
     }
 
     pub async fn resolve(&self, status: &mut SmtcStatus) -> (LyricResult, MetaInfo) {
-        log::debug!("qqmusic resolve: title={:?} artist={:?}", status.title, status.artist);
+        log::debug!(
+            "qqmusic resolve: title={:?} artist={:?}",
+            status.title,
+            status.artist
+        );
         let track = TrackInfo {
             title: status.title.clone(),
             artist: status.artist.clone(),
@@ -472,4 +544,45 @@ fn parse_loose_json(raw: &str) -> Result<serde_json::Value, serde_json::Error> {
         text.to_string()
     };
     serde_json::from_str(&text)
+}
+
+#[async_trait]
+impl MusicSource for QQMusicSource {
+    fn name(&self) -> &'static str {
+        "qqmusic"
+    }
+
+    async fn resolve(&self, status: &mut SmtcStatus) -> (LyricResult, MetaInfo) {
+        QQMusicSource::resolve(self, status).await
+    }
+
+    async fn fetch_lyrics(&self, id: u64, mid: &str) -> LyricResult {
+        QQMusicSource::fetch_lyrics(self, id, mid).await
+    }
+
+    async fn sweep_caches(&self) -> usize {
+        let mut removed = 0;
+        {
+            let mut c = self.lyric_cache.lock().await;
+            let before = c.len();
+            sweep_cache(&mut c, self.lyric_cache_ms);
+            removed += before - c.len();
+        }
+        {
+            let mut c = self.search_cache.lock().await;
+            let before = c.len();
+            sweep_cache(&mut c, self.search_cache_ms);
+            removed += before - c.len();
+        }
+        {
+            let mut c = self.meta_cache.lock().await;
+            let before = c.len();
+            sweep_cache(&mut c, self.meta_cache_ms);
+            removed += before - c.len();
+        }
+        if removed > 0 {
+            log::debug!("qqmusic caches swept: removed {removed} entries");
+        }
+        removed
+    }
 }

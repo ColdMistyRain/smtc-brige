@@ -1,31 +1,58 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::Mutex;
+use tokio::sync::{watch, Mutex};
 
-use crate::common::{SmtcStatus, EDGE_UA};
+use crate::common::{
+    sweep_cache, CacheEntry, LyricResult, MetaInfo, PositionAnchor, SmtcStatus, EDGE_UA,
+};
 use crate::config::*;
 use crate::netease::NeteaseSource;
 use crate::qqmusic::QQMusicSource;
+use crate::source::MusicSource;
+
+/// SMTC cover thumbnail cache: cover id -> (jpeg body, content-type).
+type ThumbnailCache = HashMap<String, CacheEntry<(Vec<u8>, String)>>;
 
 pub struct AppState {
     pub status_cache: Mutex<Option<(Instant, SmtcStatus)>>,
-    pub thumbnail_cache: Mutex<Option<(Instant, Vec<u8>, String)>>,
+    /// SMTC cover thumbnails keyed by cover id (per-track), so switching
+    /// tracks never serves the previous track's thumbnail.
+    pub thumbnail_cache: Mutex<ThumbnailCache>,
     /// Serialises the heavy `enriched_status` fetch so concurrent requests
     /// do not stampede the SMTC / lyrics APIs.
     pub fetch_mutex: Mutex<()>,
     /// Last *successfully connected* status snapshot, used as a fallback when
     /// the SMTC session temporarily disconnects (e.g. player paused too long).
     pub last_known_status: Mutex<Option<SmtcStatus>>,
+    /// Position anchor for estimating progress on unreliable SMTC timelines.
+    pub position_anchor: Mutex<Option<PositionAnchor>>,
     /// At most one control action (play/pause/next…) in flight at a time.
     pub control_lock: Mutex<()>,
-    pub netease: NeteaseSource,
-    pub qqmusic: QQMusicSource,
+    /// When the "SMTC disconnected/error" warning was last logged — used to
+    /// rate-limit log spam from the dashboard polling `/status` every 1.5s.
+    pub disconnect_log_at: Mutex<Option<Instant>>,
+    pub netease: Arc<NeteaseSource>,
+    pub qqmusic: Arc<QQMusicSource>,
+    /// Music sources in fallback order — `enriched_status` tries each in turn
+    /// and stops at the first one that returns lyrics.
+    pub sources: Vec<Arc<dyn MusicSource>>,
+    /// Background lyric resolution results keyed by track identity.  Filled by
+    /// `handlers::spawn_lyric_resolution` so `/status` never blocks on network
+    /// calls (slow lyric APIs used to stall responses and starve clients with
+    /// short HTTP timeouts, e.g. ESP32).
+    pub lyric_cache: Mutex<HashMap<String, CacheEntry<(LyricResult, MetaInfo)>>>,
+    /// Track identities currently being resolved in the background (dedup set,
+    /// prevents spawning duplicate resolvers for the same track).
+    pub lyric_fetching: Mutex<HashSet<String>>,
     pub http_client: reqwest::Client,
+    /// Shutdown signal: `handle_shutdown` flips this to `true`, `main` waits
+    /// for it and drains connections gracefully.
+    pub shutdown: watch::Sender<bool>,
 }
 
 impl AppState {
-    pub fn new() -> Self {
+    pub fn new(shutdown: watch::Sender<bool>) -> Self {
         // Create a single shared HTTP client for all sources.
         let http_client = reqwest::Client::builder()
             .user_agent(EDGE_UA)
@@ -35,7 +62,7 @@ impl AppState {
             .build()
             .expect("reqwest client");
 
-        let netease = NeteaseSource::new(
+        let netease = Arc::new(NeteaseSource::new(
             Arc::new(Mutex::new(HashMap::new())),
             Arc::new(Mutex::new(HashMap::new())),
             Arc::new(Mutex::new(HashMap::new())),
@@ -43,9 +70,9 @@ impl AppState {
             SEARCH_CACHE_MS,
             META_CACHE_MS,
             http_client.clone(),
-        );
+        ));
 
-        let qqmusic = QQMusicSource::new(
+        let qqmusic = Arc::new(QQMusicSource::new(
             Arc::new(Mutex::new(HashMap::new())),
             Arc::new(Mutex::new(HashMap::new())),
             Arc::new(Mutex::new(HashMap::new())),
@@ -53,80 +80,43 @@ impl AppState {
             SEARCH_CACHE_MS,
             META_CACHE_MS,
             http_client.clone(),
-        );
+        ));
+
+        // Fallback order: QQ Music first for QQ sessions, NetEase as the
+        // general source.  `enriched_status` picks the relevant order.
+        let sources: Vec<Arc<dyn MusicSource>> = vec![qqmusic.clone(), netease.clone()];
 
         Self {
             status_cache: Mutex::new(None),
-            thumbnail_cache: Mutex::new(None),
+            thumbnail_cache: Mutex::new(HashMap::new()),
             fetch_mutex: Mutex::new(()),
             last_known_status: Mutex::new(None),
+            position_anchor: Mutex::new(None),
             control_lock: Mutex::new(()),
+            disconnect_log_at: Mutex::new(None),
             netease,
             qqmusic,
+            sources,
+            lyric_cache: Mutex::new(HashMap::new()),
+            lyric_fetching: Mutex::new(HashSet::new()),
             http_client,
+            shutdown,
         }
     }
 
-    /// Sweep all caches (lyric, search, meta) for both providers.
+    /// Sweep the caches of every music source plus the background lyric and
+    /// cover-thumbnail caches.
     pub async fn sweep_all_caches(&self) {
-        use crate::common::sweep_cache;
-
-        // NetEase caches
-        {
-            let mut c = self.netease.lyric_cache.lock().await;
-            let before = c.len();
-            sweep_cache(&mut c, self.netease.lyric_cache_ms);
-            let after = c.len();
-            if before != after {
-                log::debug!("netease lyric cache swept: {before} -> {after}");
-            }
+        for source in &self.sources {
+            source.sweep_caches().await;
         }
         {
-            let mut c = self.netease.search_cache.lock().await;
-            let before = c.len();
-            sweep_cache(&mut c, self.netease.search_cache_ms);
-            let after = c.len();
-            if before != after {
-                log::debug!("netease search cache swept: {before} -> {after}");
-            }
+            let mut c = self.lyric_cache.lock().await;
+            sweep_cache(&mut c, LYRIC_CACHE_MS);
         }
         {
-            let mut c = self.netease.meta_cache.lock().await;
-            let before = c.len();
-            sweep_cache(&mut c, self.netease.meta_cache_ms);
-            let after = c.len();
-            if before != after {
-                log::debug!("netease meta cache swept: {before} -> {after}");
-            }
-        }
-
-        // QQ Music caches
-        {
-            let mut c = self.qqmusic.lyric_cache.lock().await;
-            let before = c.len();
-            sweep_cache(&mut c, self.qqmusic.lyric_cache_ms);
-            let after = c.len();
-            if before != after {
-                log::debug!("qqmusic lyric cache swept: {before} -> {after}");
-            }
-        }
-        {
-            let mut c = self.qqmusic.search_cache.lock().await;
-            let before = c.len();
-            sweep_cache(&mut c, self.qqmusic.search_cache_ms);
-            let after = c.len();
-            if before != after {
-                log::debug!("qqmusic search cache swept: {before} -> {after}");
-            }
-        }
-        {
-            let mut c = self.qqmusic.meta_cache.lock().await;
-            let before = c.len();
-            sweep_cache(&mut c, self.qqmusic.meta_cache_ms);
-            let after = c.len();
-            if before != after {
-                log::debug!("qqmusic meta cache swept: {before} -> {after}");
-            }
+            let mut c = self.thumbnail_cache.lock().await;
+            sweep_cache(&mut c, THUMBNAIL_CACHE_MS);
         }
     }
 }
