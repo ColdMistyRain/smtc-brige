@@ -114,6 +114,7 @@ cargo build --release       # 发布构建（windows_subsystem="windows" 无控�
 | `GET /health` | 健康检查 |
 | `GET /status?fresh=1` | 播放状态（`fresh=1` 强制绕过 650ms 缓存）；字段见 `SmtcStatus`，含 `raw` 原始 SMTC 数据 |
 | `GET /lyrics?provider=&id=&ncm_id=&songmid=` | 歌词（provider 缺省按当前状态推断；`qq`/`qqartist` 归一为 `qqmusic`） |
+| `GET /lyrics/now` | 当前播放曲目的完整歌词（无需参数；后台解析未完成时返回 `loading:true`，可稍后重试） |
 | `GET /cover?provider=smtc&id=&size=96` | 封面（`provider=smtc` 走 SMTC 缩略图；size 夹在 32–512） |
 | `GET/POST /control?action=...` | `play`/`pause`/`playpause`/`next`/`previous`/`seek_forward`/`seek_back`（±`SEEK_MS`=15s）。202 立即返回，后台 `control_lock` 串行执行，5s 超时 |
 | `GET /shutdown` | 优雅退出（watch 信号 → 排空连接） |

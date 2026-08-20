@@ -757,6 +757,58 @@ pub async fn handle_lyrics(
     }
 }
 
+/// Return the full lyrics of the *currently playing* track, with no parameters
+/// needed.  Serves the background-resolved result; when the resolution hasn't
+/// finished yet it returns `loading: true` (the caller can retry shortly).
+#[derive(Deserialize, Default)]
+pub struct LyricsNowQuery {
+    pub fresh: Option<String>,
+}
+
+pub async fn handle_lyrics_now(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<LyricsNowQuery>,
+) -> Response {
+    let result: Result<_, String> = async {
+        let status = enriched_status(&state, params.fresh.as_deref() == Some("1")).await;
+        let track_key = position_track_key(&status);
+        let cached = {
+            let cache = state.lyric_cache.lock().await;
+            cache
+                .get(&track_key)
+                .filter(|e| e.is_fresh(LYRIC_CACHE_MS))
+                .map(|e| e.value.0.clone())
+        };
+        match cached {
+            Some(found) => Ok(serde_json::json!({
+                "ok": true,
+                "loading": false,
+                "source": found.source,
+                "translation_line_count": found.translation_line_count,
+                "line_count": found.lines.len(),
+                "lines": found.lines,
+            })),
+            None => Ok(serde_json::json!({
+                "ok": true,
+                "loading": true,
+                "source": "",
+                "translation_line_count": 0,
+                "line_count": 0,
+                "lines": [],
+            })),
+        }
+    }
+    .await;
+
+    match result {
+        Ok(v) => send_json(&v),
+        Err(e) => json_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &serde_json::json!({"ok":false,"error":e,"lines":[],"loading":true}),
+        ),
+    }
+}
+
 #[derive(Deserialize, Default)]
 pub struct CoverQuery {
     pub provider: Option<String>,

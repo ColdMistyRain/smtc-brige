@@ -82,6 +82,7 @@ async fn main() {
         .route("/health", get(handle_health))
         .route("/status", get(handle_status))
         .route("/lyrics", get(handle_lyrics))
+        .route("/lyrics/now", get(handle_lyrics_now))
         .route("/cover", get(handle_cover))
         .route("/control", get(handle_control).post(handle_control))
         .route("/shutdown", get(handle_shutdown))
