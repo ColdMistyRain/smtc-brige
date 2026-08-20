@@ -30,8 +30,9 @@ cargo build --release      # 发布版（无控制台窗口）
 |------|------|
 | `GET /` | Web 仪表盘页面 |
 | `GET /health` | 健康检查 |
-| `GET /status` | 当前播放状态（歌名、歌手、专辑、封面URL、进度） |
+| `GET /status` | 当前播放状态（歌名、歌手、专辑、封面URL、进度、完整歌词 `full_lyrics`） |
 | `GET /lyrics?provider=&id=` | 获取歌词 |
+| `GET /lyrics/now` | 当前播放曲目的完整歌词（无需参数；后台解析中返回 `loading:true`） |
 | `GET /cover?provider=smtc&size=96` | 封面图片（size: 32–512，默认 96） |
 | `GET /control?action=playpause` | 媒体控制命令 |
 | `GET /shutdown` | 优雅退出 |

@@ -30,8 +30,9 @@ cargo build --release      # release mode (no console window)
 |----------|-------------|
 | `GET /` | Web dashboard page |
 | `GET /health` | Health check |
-| `GET /status` | Current playback status (title, artist, album, cover URL, progress) |
+| `GET /status` | Current playback status (title, artist, album, cover URL, progress, full lyrics in `full_lyrics`) |
 | `GET /lyrics?provider=&id=` | Fetch lyrics from specified provider |
+| `GET /lyrics/now` | Full lyrics of the currently playing track (no params needed; returns `loading:true` while the background resolution is in progress) |
 | `GET /cover?provider=smtc&size=96` | Cover art image (size: 32–512, defaults to 96) |
 | `GET /control?action=playpause` | Media control command |
 | `GET /shutdown` | Graceful shutdown |
