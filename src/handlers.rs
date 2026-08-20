@@ -262,6 +262,9 @@ pub async fn enriched_status(state: &Arc<AppState>, force: bool) -> SmtcStatus {
                 status.translation_line_count = lyric.translation_line_count;
                 status.lyric_source = lyric.source;
                 status.lyric = lyric_at(&lyric.lines, status.position_ms.max(0) as u64);
+                // Expose the full lyrics on `/status` so clients (ESP32) get
+                // everything in one request.
+                status.full_lyrics = lyric.lines.clone();
 
                 // Cover identity: title+artist alone collide for tracks with
                 // the same/empty title (this made e.g. 《模特》 show the

@@ -84,6 +84,11 @@ pub struct SmtcStatus {
     pub lyric_source: String,
     #[serde(default)]
     pub lyric: LyricPosition,
+    /// Full lyrics of the current track (all lines), filled by the background
+    /// resolver — lets clients get the complete lyrics straight from `/status`
+    /// without a second request.
+    #[serde(default)]
+    pub full_lyrics: Vec<LrcLine>,
 
     // Provider hints
     #[serde(default)]
