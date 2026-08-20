@@ -1,5 +1,7 @@
 # SMTC Bridge（中文）
 
+[简体中文](README_zh.md) | [English](README.md)
+
 Windows 系统媒体传输控制（SMTC）桥接服务，将当前播放的音乐信息通过 HTTP API 暴露，支持歌词匹配、封面提取和远程控制。
 
 ## 特性

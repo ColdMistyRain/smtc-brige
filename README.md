@@ -1,5 +1,7 @@
 # SMTC Bridge
 
+[English](README.md) | [简体中文](README_zh.md)
+
 A Windows System Media Transport Controls (SMTC) bridge service that exposes currently playing music information via HTTP API, with support for lyrics matching, cover art extraction, and remote control.
 
 ## Features
