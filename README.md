@@ -67,22 +67,3 @@ Optional environment variables:
 ## License
 
 MIT
-
-## 配置
-
-可选环境变量：
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `SMTC_BRIDGE_HOST` | `0.0.0.0` | 监听地址（日志中显示为 `127.0.0.1`，可直接复制打开） |
-| `SMTC_BRIDGE_PORT` | `17865` | 监听端口 |
-
-## 技术栈
-
-- **后端**: Rust + axum + tokio
-- **SMTC**: windows-rs (Windows) / dbus MPRIS (Linux)
-- **歌词源**: 网易云音乐 API / QQ 音乐 API
-
-## License
-
-MIT
