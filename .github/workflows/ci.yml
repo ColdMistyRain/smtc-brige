@@ -36,26 +36,3 @@ jobs:
 
       - name: Format check
         run: cargo fmt --check
-
-  # Secondary platform: keeps the MPRIS (dbus) code path compiling.
-  check-linux:
-    name: Check / Test (Linux)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Cargo registry / build
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install dbus dev headers
-        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev
-
-      - name: Build check
-        run: cargo check
-
-      - name: Tests
-        run: cargo test

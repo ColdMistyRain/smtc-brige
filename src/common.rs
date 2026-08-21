@@ -62,7 +62,7 @@ pub struct SmtcStatus {
     pub selected_current: bool,
     pub updated_at: i64,
 
-    /// SMTC 会话（Windows）/ MPRIS 播放器（Linux）上报的每一个原始字段，
+    /// SMTC 会话（Windows）上报的每一个原始字段，
     /// 原样暴露，便于消费者查看桥接服务从系统媒体传输控件收到的全部数据。
     #[serde(default)]
     pub raw: RawSmtcInfo,
@@ -107,7 +107,7 @@ pub struct SmtcStatus {
     pub error: String,
 }
 
-/// 来自系统媒体传输控件会话（Windows SMTC）或 MPRIS 播放器（Linux）的
+/// 来自系统媒体传输控件会话（Windows SMTC）的
 /// 原始数据。所有值都是操作系统/播放器上报的原始内容；桥接服务在此
 /// 不做任何转换。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

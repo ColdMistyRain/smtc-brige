@@ -10,7 +10,7 @@ Windows 系统媒体传输控制（SMTC）桥接服务，将当前播放的音�
 - 🎤 **歌词匹配** — 网易云 / QQ 音乐双源，自动换行
 - 🖼️ **封面提取** — 直接从 SMTC 缩略图获取，无需外部 CDN
 - 🎮 **远程控制** — 播放/暂停/上下曲/快进快退
-- 🌐 **跨平台** — Windows (SMTC) / Linux (MPRIS) / macOS (桩)
+- 🌐 **平台** — Windows (SMTC)，其他平台为空实现
 - 📝 **日志记录** — 自动写入 `smtc-bridge.log`
 
 ## 快速开始
@@ -63,7 +63,7 @@ cargo build --release      # 发布版（无控制台窗口）
 ## 技术栈
 
 - **后端**: Rust + axum + tokio
-- **SMTC**: windows-rs (Windows) / dbus MPRIS (Linux)
+- **SMTC**: windows-rs (Windows)
 - **歌词源**: 网易云音乐 API / QQ 音乐 API
 
 ## License

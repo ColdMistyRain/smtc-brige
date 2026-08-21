@@ -2,8 +2,8 @@
 
 ## 项目概览
 
-SMTC Bridge 是一个系统媒体传输控制（SMTC）桥接服务。它读取 Windows SMTC /
-Linux MPRIS 暴露的"当前正在播放的媒体"信息，以 HTTP API 的形式提供给局域网内的
+SMTC Bridge 是一个系统媒体传输控制（SMTC）桥接服务。它读取 Windows SMTC 暴露的
+"当前正在播放的媒体"信息，以 HTTP API 的形式提供给局域网内的
 其他设备（如 ESP32 等嵌入式播放器），并支持歌词匹配、封面提取与远程控制
 （播放/暂停/切歌/快进快退）。
 
@@ -19,7 +19,6 @@ Linux MPRIS 暴露的"当前正在播放的媒体"信息，以 HTTP API 的形�
 - Rust 2021 + axum 0.7 + tokio 1（full features）+ reqwest 0.12 + serde
 - Windows：windows-rs 0.58（`Media_Control` / `Storage_Streams` / `Foundation` /
   `Foundation_Collections`）
-- Linux：dbus 0.9（MPRIS）
 - 其他平台：`src/smtc/noop.rs` 空实现
 - 图片处理：`image` 0.25（封面缩放为 JPEG）
 - 发布：GitHub Actions（`v*` tag 触发，构建 Windows x86_64 exe）
@@ -37,9 +36,8 @@ Linux MPRIS 暴露的"当前正在播放的媒体"信息，以 HTTP API 的形�
 | `netease.rs` | 网易云源：搜索、歌词、元数据（各带独立 TTL 缓存，实现 `MusicSource` trait） |
 | `qqmusic.rs` | QQ 音乐源：搜索、歌词、元数据（各带独立 TTL 缓存，实现 `MusicSource` trait） |
 | `source.rs` | `MusicSource` trait（async-trait）：`resolve`/`fetch_lyrics`/`sweep_caches`/`name`；`AppState.sources` 按序构成回退链 |
-| `smtc.rs` | 封面 JPEG 缩放（`resize_cover_jpeg`）+ 平台分派（cfg 导出 win/mpris/noop） |
+| `smtc.rs` | 封面 JPEG 缩放（`resize_cover_jpeg`）+ 平台分派（cfg 导出 win/noop） |
 | `smtc/win.rs` | Windows SMTC：状态采样、控制、缩略图（见下方"关键设计"） |
-| `smtc/mpris.rs` | Linux MPRIS 等价实现 |
 
 ## 关键业务逻辑（最容易踩坑的地方）
 
@@ -140,6 +138,5 @@ cargo build --release       # 发布构建（windows_subsystem="windows" 无控�
   属性 4s）。CPU 密集的封面缩放（Lanczos+JPEG）也在 `spawn_blocking` 上跑。
 - 平台分派只通过 `src/smtc.rs` 的 `cfg` 导出，不要在业务代码里直接
   `#[cfg(target_os = "windows")]`。
-- CI（`.github/workflows/ci.yml`）在 Windows 与 Linux 双平台跑
-  `cargo check`/`test`，Windows 上另跑 `clippy -D warnings` 与 `fmt --check`；
-  Linux 路径依赖 dbus，改动 `smtc/mpris.rs` 后务必让 CI 过。
+- CI（`.github/workflows/ci.yml`）在 Windows 上跑 `cargo check`/`test`、
+  `clippy -D warnings` 与 `fmt --check`。

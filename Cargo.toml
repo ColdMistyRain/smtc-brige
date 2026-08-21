@@ -34,9 +34,6 @@ windows = { version = "0.58", features = [
     "Foundation_Collections",
 ] }
 
-[target.'cfg(target_os = "linux")'.dependencies]
-dbus = "0.9"
-
 [target.'cfg(windows)'.build-dependencies]
 # 把版本/产品信息作为 VERSIONINFO 资源嵌入 Windows exe（见 build.rs）
 winres = "0.1.1"

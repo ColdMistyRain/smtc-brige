@@ -43,12 +43,8 @@ mod win;
 #[cfg(target_os = "windows")]
 pub use win::{smtc_control, smtc_status_raw, smtc_thumbnail};
 
-#[cfg(target_os = "linux")]
-mod mpris;
-#[cfg(target_os = "linux")]
-pub use mpris::{smtc_control, smtc_status_raw, smtc_thumbnail};
-
-#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+// 其他平台使用空实现（本项目主要面向 Windows）。
+#[cfg(not(target_os = "windows"))]
 mod noop;
-#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+#[cfg(not(target_os = "windows"))]
 pub use noop::{smtc_control, smtc_status_raw, smtc_thumbnail};

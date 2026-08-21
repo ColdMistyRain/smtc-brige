@@ -10,7 +10,7 @@ A Windows System Media Transport Controls (SMTC) bridge service that exposes cur
 - 🎤 **Lyrics Matching** — Dual-source: NetEase Cloud & QQ Music, with automatic line wrapping
 - 🖼️ **Cover Art Extraction** — Directly from SMTC thumbnail, no external CDN required
 - 🎮 **Remote Control** — Play/Pause/Next/Previous/Seek forward & backward
-- 🌐 **Cross-Platform** — Windows (SMTC) / Linux (MPRIS) / macOS (no-op stub)
+- 🌐 **Platform** — Windows (SMTC); no-op stub on other platforms
 - 📝 **Logging** — Auto-logged to `smtc-bridge.log`
 
 ## Quick Start
@@ -63,7 +63,7 @@ Optional environment variables:
 ## Tech Stack
 
 - **Backend**: Rust + axum + tokio
-- **SMTC**: windows-rs (Windows) / dbus MPRIS (Linux)
+- **SMTC**: windows-rs (Windows)
 - **Lyrics Sources**: NetEase Cloud Music API / QQ Music API
 
 ## License
