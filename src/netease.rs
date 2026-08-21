@@ -57,7 +57,7 @@ impl NeteaseSource {
                     return entry.value;
                 }
             }
-            // Sweep expired entries on miss to keep cache lean.
+            // 未命中时清扫过期条目，保持缓存精简。
             sweep_cache(&mut cache, self.search_cache_ms);
         }
 
@@ -218,7 +218,7 @@ impl NeteaseSource {
                     Ok(doc) => {
                         if let Some(songs) = doc["songs"].as_array() {
                             if let Some(song) = songs.first() {
-                                // JS: song?.album || song?.al || {}
+                                // JS：song?.album || song?.al || {}
                                 let album =
                                     song["album"].as_object().or_else(|| song["al"].as_object());
 

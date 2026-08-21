@@ -1,4 +1,4 @@
-// Stub SMTC implementation for non-Windows platforms.
+// 非 Windows 平台的 SMTC 桩（stub）实现。
 use crate::common::SmtcStatus;
 
 pub async fn smtc_status_raw() -> Result<SmtcStatus, String> {

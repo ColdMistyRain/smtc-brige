@@ -1,7 +1,7 @@
 use image::codecs::jpeg::JpegEncoder;
 use std::io::Cursor;
 
-// ── Cover Resize (cross-platform) ───────────────────────────────────────────
+// ── 封面缩放（跨平台） ───────────────────────────────────────────
 
 #[allow(dead_code)]
 pub fn resize_cover_jpeg(buffer: &[u8], size: u32) -> Result<Vec<u8>, String> {
@@ -36,7 +36,7 @@ pub fn resize_cover_jpeg(buffer: &[u8], size: u32) -> Result<Vec<u8>, String> {
     Ok(buf)
 }
 
-// ── SMTC API (platform-specific) ────────────────────────────────────────────
+// ── SMTC API（平台相关） ────────────────────────────────────────────
 
 #[cfg(target_os = "windows")]
 mod win;

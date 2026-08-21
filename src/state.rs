@@ -11,49 +11,48 @@ use crate::netease::NeteaseSource;
 use crate::qqmusic::QQMusicSource;
 use crate::source::MusicSource;
 
-/// SMTC cover thumbnail cache: cover id -> (jpeg body, content-type).
+/// SMTC 封面缩略图缓存：封面 id -> (jpeg 数据, content-type)。
 type ThumbnailCache = HashMap<String, CacheEntry<(Vec<u8>, String)>>;
 
 pub struct AppState {
     pub status_cache: Mutex<Option<(Instant, SmtcStatus)>>,
-    /// SMTC cover thumbnails keyed by cover id (per-track), so switching
-    /// tracks never serves the previous track's thumbnail.
+    /// SMTC 封面缩略图，按封面 id 键控（每首曲目独立），这样切歌时
+    /// 绝不会返回上一首歌的缩略图。
     pub thumbnail_cache: Mutex<ThumbnailCache>,
-    /// Serialises the heavy `enriched_status` fetch so concurrent requests
-    /// do not stampede the SMTC / lyrics APIs.
+    /// 序列化耗时的 `enriched_status` 抓取，避免并发请求
+    /// 冲击 SMTC / 歌词 API。
     pub fetch_mutex: Mutex<()>,
-    /// Last *successfully connected* status snapshot, used as a fallback when
-    /// the SMTC session temporarily disconnects (e.g. player paused too long).
+    /// 最后一次*成功连接*的状态快照，当 SMTC 会话暂时断开时
+    /// （例如播放器暂停过久）用作回退数据。
     pub last_known_status: Mutex<Option<SmtcStatus>>,
-    /// Position anchor for estimating progress on unreliable SMTC timelines.
+    /// 位置锚点，用于在 SMTC 时间线不可靠时估算播放进度。
     pub position_anchor: Mutex<Option<PositionAnchor>>,
-    /// At most one control action (play/pause/next…) in flight at a time.
+    /// 同一时刻最多只有一个控制动作（播放/暂停/切歌…）在执行。
     pub control_lock: Mutex<()>,
-    /// When the "SMTC disconnected/error" warning was last logged — used to
-    /// rate-limit log spam from the dashboard polling `/status` every 1.5s.
+    /// 上次记录"SMTC 断开/错误"警告的时间 —— 用于限制仪表盘每 1.5s
+    /// 轮询 `/status` 产生的日志刷屏。
     pub disconnect_log_at: Mutex<Option<Instant>>,
     pub netease: Arc<NeteaseSource>,
     pub qqmusic: Arc<QQMusicSource>,
-    /// Music sources in fallback order — `enriched_status` tries each in turn
-    /// and stops at the first one that returns lyrics.
+    /// 音乐源按回退顺序排列 —— `enriched_status` 依次尝试每个源，
+    /// 在第一个返回歌词的源处停止。
     pub sources: Vec<Arc<dyn MusicSource>>,
-    /// Background lyric resolution results keyed by track identity.  Filled by
-    /// `handlers::spawn_lyric_resolution` so `/status` never blocks on network
-    /// calls (slow lyric APIs used to stall responses and starve clients with
-    /// short HTTP timeouts, e.g. ESP32).
+    /// 后台歌词解析结果，按曲目标识键控。由 `handlers::spawn_lyric_resolution`
+    /// 填充，确保 `/status` 永不阻塞在网络调用上（慢速歌词 API 曾导致响应
+    /// 卡顿，饿死 HTTP 短超时的客户端，例如 ESP32）。
     pub lyric_cache: Mutex<HashMap<String, CacheEntry<(LyricResult, MetaInfo)>>>,
-    /// Track identities currently being resolved in the background (dedup set,
-    /// prevents spawning duplicate resolvers for the same track).
+    /// 当前正在后台解析的曲目标识（去重集合，
+    /// 防止为同一曲目重复启动解析任务）。
     pub lyric_fetching: Mutex<HashSet<String>>,
     pub http_client: reqwest::Client,
-    /// Shutdown signal: `handle_shutdown` flips this to `true`, `main` waits
-    /// for it and drains connections gracefully.
+    /// 关闭信号：`handle_shutdown` 将其置为 `true`，`main` 等待该信号
+    /// 并优雅地排空连接。
     pub shutdown: watch::Sender<bool>,
 }
 
 impl AppState {
     pub fn new(shutdown: watch::Sender<bool>) -> Self {
-        // Create a single shared HTTP client for all sources.
+        // 为所有音乐源创建一个共享的 HTTP 客户端。
         let http_client = reqwest::Client::builder()
             .user_agent(EDGE_UA)
             .timeout(std::time::Duration::from_secs(9))
@@ -82,8 +81,8 @@ impl AppState {
             http_client.clone(),
         ));
 
-        // Fallback order: QQ Music first for QQ sessions, NetEase as the
-        // general source.  `enriched_status` picks the relevant order.
+        // 回退顺序：QQ 会话优先 QQ 音乐，网易云作为通用源。
+        // `enriched_status` 会选择相应的顺序。
         let sources: Vec<Arc<dyn MusicSource>> = vec![qqmusic.clone(), netease.clone()];
 
         Self {
@@ -104,8 +103,7 @@ impl AppState {
         }
     }
 
-    /// Sweep the caches of every music source plus the background lyric and
-    /// cover-thumbnail caches.
+    /// 清扫所有音乐源的缓存，以及后台歌词与封面缩略图缓存。
     pub async fn sweep_all_caches(&self) {
         for source in &self.sources {
             source.sweep_caches().await;

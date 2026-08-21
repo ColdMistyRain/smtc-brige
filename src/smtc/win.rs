@@ -1,4 +1,4 @@
-// Windows SMTC implementation using the windows-rs crate.
+// 基于 windows-rs crate 的 Windows SMTC 实现。
 use std::collections::{HashMap, VecDeque};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Condvar, LazyLock, Mutex as StdMutex};
@@ -33,14 +33,14 @@ fn to_string_lossy(h: &HSTRING) -> String {
     h.to_string_lossy()
 }
 
-/// Convert a Windows `FILETIME`-style timestamp (100ns ticks since
-/// 1601-01-01 UTC, as exposed by `DateTime::UniversalTime`) to Unix epoch ms.
+/// 将 Windows `FILETIME` 风格的时间戳（自 1601-01-01 UTC 起的 100ns 刻度，
+/// 由 `DateTime::UniversalTime` 暴露）转换为 Unix 纪元毫秒。
 fn filetime_to_unix_ms(ticks: i64) -> i64 {
-    // 11644473600000 ms = the offset between 1601-01-01 and 1970-01-01.
+    // 11644473600000 ms = 1601-01-01 与 1970-01-01 之间的偏移量。
     ticks / 10_000 - 11_644_473_600_000
 }
 
-/// Collect *every* raw field the SMTC session exposes, verbatim.
+/// 原样收集 SMTC 会话暴露的*每一个*原始字段。
 #[allow(clippy::too_many_arguments)]
 fn build_raw_info(
     candidate: &GlobalSystemMediaTransportControlsSession,
@@ -58,8 +58,8 @@ fn build_raw_info(
     };
 
     if let Some(pb) = playback {
-        // `MediaPlaybackType` / `MediaPlaybackAutoRepeatMode` are transparent
-        // i32 wrappers — map the well-known values to readable names.
+        // `MediaPlaybackType` / `MediaPlaybackAutoRepeatMode` 是透明的
+        // i32 包装 —— 把已知取值映射为可读名称。
         raw.playback_type = pb
             .PlaybackType()
             .ok()
@@ -108,8 +108,8 @@ fn build_raw_info(
         raw.min_seek_ticks = tick(tl.MinSeekTime());
         raw.max_seek_ticks = tick(tl.MaxSeekTime());
         raw.position_ticks = tick(tl.Position());
-        // NetEase reports `LastUpdatedTime` = 0 (FILETIME epoch), which
-        // converts to a large negative unix value — show 0 for "not set".
+        // 网易云上报 `LastUpdatedTime` = 0（FILETIME 纪元），转换后会得到
+        // 一个很大的负 unix 值 —— 对"未设置"显示 0。
         raw.last_updated_unix_ms = tl
             .LastUpdatedTime()
             .ok()
@@ -152,17 +152,17 @@ fn parse_ncm_id(genres: &[String]) -> i64 {
     0
 }
 
-// ── Status ──────────────────────────────────────────────────────────────────
+// ── 状态 ──────────────────────────────────────────────────────────────────
 
-/// Maximum time to wait for a single SMTC `TryGetMediaPropertiesAsync` call.
+/// 等待单次 SMTC `TryGetMediaPropertiesAsync` 调用的最大时间。
 const MEDIA_PROPS_TIMEOUT: Duration = Duration::from_secs(4);
-/// Maximum time for the entire SMTC status fetch (manager + all sessions).
+/// 整个 SMTC 状态抓取（manager + 所有会话）的最大时间。
 const SMTC_STATUS_TIMEOUT: Duration = Duration::from_secs(8);
 
-/// Number of worker threads that run blocking SMTC async ops.
+/// 执行阻塞 SMTC 异步操作的工作线程数。
 const PROPS_WORKERS: usize = 4;
-/// How long we stop probing a session whose media-properties op timed out
-/// (a broken session that never completes must not keep occupying a worker).
+/// 对媒体属性操作超时的会话停止探测多长时间
+/// （永不完成的损坏会话不能一直占用一个工作线程）。
 const HUNG_SESSION_COOLDOWN: Duration = Duration::from_secs(60);
 
 type MediaProps = GlobalSystemMediaTransportControlsSessionMediaProperties;
@@ -172,11 +172,10 @@ struct PropsJob {
     reply: Sender<Option<MediaProps>>,
 }
 
-/// A small, fixed pool of OS threads that execute blocking
-/// `IAsyncOperation::get()` calls.  Creating a fresh thread per call would
-/// leak an OS thread every time a broken SMTC session never completes its
-/// async op, so all calls go through this bounded pool instead of spawning
-/// unbounded threads.
+/// 一个执行阻塞 `IAsyncOperation::get()` 调用的小型固定 OS 线程池。
+/// 每次调用都新建线程的话，每当损坏的 SMTC 会话永不完成其异步操作时，
+/// 就会泄漏一个 OS 线程，因此所有调用都经由这个有界线程池，
+/// 而不是创建无界线程。
 struct PropsPool {
     inner: Arc<PropsInner>,
 }
@@ -222,20 +221,20 @@ impl PropsPool {
 }
 
 static PROPS_POOL: LazyLock<PropsPool> = LazyLock::new(PropsPool::new);
-/// Sessions whose media-properties call recently timed out (app id -> when),
-/// so they are skipped instead of repeatedly occupying a worker forever.
-/// Re-probed only after `HUNG_SESSION_COOLDOWN` elapses.
+/// 媒体属性调用最近超时的会话（app id -> 时间），跳过这些会话，
+/// 而不是让它们永远占用工作线程。仅在 `HUNG_SESSION_COOLDOWN`
+/// 过后才重新探测。
 static HUNG_SESSIONS: LazyLock<StdMutex<HashMap<String, Instant>>> =
     LazyLock::new(|| StdMutex::new(HashMap::new()));
 
-/// Call `TryGetMediaPropertiesAsync` with a per-session timeout so one stale
-/// session cannot block the whole loop.
+/// 以按会话超时的方式调用 `TryGetMediaPropertiesAsync`，避免一个过期
+/// 会话阻塞整个循环。
 fn try_get_media_properties(
     session: &GlobalSystemMediaTransportControlsSession,
 ) -> Option<MediaProps> {
     let app_id = to_string_lossy(&session.SourceAppUserModelId().unwrap_or_default());
 
-    // Skip sessions that recently hung — don't keep submitting work for them.
+    // 跳过最近挂起的会话 —— 不要再为它们提交任务。
     {
         let mut hung = HUNG_SESSIONS.lock().unwrap_or_else(|e| e.into_inner());
         hung.retain(|_, at| at.elapsed() < HUNG_SESSION_COOLDOWN);
@@ -254,8 +253,8 @@ fn try_get_media_properties(
 
     let result = reply_rx.recv_timeout(MEDIA_PROPS_TIMEOUT).ok().flatten();
     if result.is_none() {
-        // Remember the session so we stop submitting work for it (the thread
-        // count is bounded now, but the hung op still occupies a worker).
+        // 记住该会话，停止为其提交任务（线程数现在有界，但挂起的操作
+        // 仍占用一个工作线程）。
         let mut hung = HUNG_SESSIONS.lock().unwrap_or_else(|e| e.into_inner());
         hung.insert(app_id, Instant::now());
         log::warn!(
@@ -317,9 +316,8 @@ pub async fn smtc_status_raw() -> Result<SmtcStatus, String> {
                     if playback_status.contains("Playing") {
                         score += 3000;
                     }
-                    // Paused/Paused sessions with valid metadata are still useful —
-                    // do not penalise them too harshly compared to sessions without
-                    // any props.
+                    // 有有效元数据的暂停/停止会话仍然有用 —— 相比没有任何属性的
+                    // 会话，不要过于严厉地扣分。
                     if is_current {
                         score += 1200;
                     }
@@ -379,29 +377,27 @@ pub async fn smtc_status_raw() -> Result<SmtcStatus, String> {
                             .unwrap_or(0);
                         let position_base_ms = (pos_ticks / 10000).max(0);
 
-                        // SMTC `Position` is only a snapshot — the player updates
-                        // it sporadically.  Combine it with `LastUpdatedTime` and
-                        // `PlaybackRate` so the bridge can extrapolate a live
-                        // position even for players that don't push frequent
-                        // updates (NetEase Cloud Music, web video in browsers).
+                        // SMTC `Position` 只是快照 —— 播放器偶尔更新它。
+                        // 将其与 `LastUpdatedTime` 和 `PlaybackRate` 结合，
+                        // 使桥接服务即便对不频繁推送更新的播放器
+                        // （网易云音乐、浏览器网页视频）也能外推实时位置。
                         let last_updated_ms = timeline
                             .as_ref()
                             .and_then(|tl| tl.LastUpdatedTime().ok())
                             .map(|dt| filetime_to_unix_ms(dt.UniversalTime))
-                            // Guard against zero / future timestamps (clock skew).
+                            // 防止零值 / 未来时间戳（时钟偏移）。
                             .filter(|&t| t > 0 && t <= now_ms)
                             .unwrap_or(now_ms);
 
-                        // `PlaybackRate` lives on the playback info (nullable),
-                        // not on the timeline properties.
+                        // `PlaybackRate` 位于播放信息（可为 null）上，而不在时间线属性上。
                         let raw_rate = playback
                             .as_ref()
                             .and_then(|pb| pb.PlaybackRate().ok())
                             .and_then(|r| r.Value().ok())
                             .unwrap_or(0.0);
 
-                        // Only extrapolate while actually playing; if a playing
-                        // player forgets to report a rate, assume 1.0.
+                        // 仅在实际播放时外推；若播放中的播放器忘记上报速率，
+                        // 则假定为 1.0。
                         let rate = if playback_status == "Playing" {
                             if raw_rate > 0.0 {
                                 raw_rate
@@ -488,14 +484,14 @@ pub async fn smtc_status_raw() -> Result<SmtcStatus, String> {
     }
 }
 
-// ── Control ─────────────────────────────────────────────────────────────────
+// ── 控制 ─────────────────────────────────────────────────────────────────
 
 const CONTROL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// Pick the session a control action should target.  `GetCurrentSession()`
-/// alone is unreliable: once a player pauses for a while (or its SMTC session
-/// goes stale) it reports "no session".  Fall back to scanning `GetSessions()`
-/// and choosing the most active one (Playing > Paused > any).
+/// 选择控制动作应作用于的会话。仅靠 `GetCurrentSession()` 并不可靠：
+/// 一旦播放器暂停一段时间（或其 SMTC 会话过期），它会返回"无会话"。
+/// 回退为扫描 `GetSessions()` 并选择最活跃的会话
+/// （Playing > Paused > 任意）。
 fn pick_control_session(
     manager: &GlobalSystemMediaTransportControlsSessionManager,
 ) -> Result<GlobalSystemMediaTransportControlsSession, String> {
@@ -623,7 +619,7 @@ pub async fn smtc_control(action: &str, seek_ms: u64) -> Result<(), String> {
     }
 }
 
-// ── Thumbnail ───────────────────────────────────────────────────────────────
+// ── 缩略图 ───────────────────────────────────────────────────────────────
 
 const THUMBNAIL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(6);
 
@@ -643,8 +639,8 @@ pub async fn smtc_thumbnail() -> Result<(Vec<u8>, String), String> {
             let mut best_score: i32 = -999999;
 
             for candidate in sessions.into_iter() {
-                // Reuse the bounded props pool + hung-session circuit breaker —
-                // a bare `op.get()` here would hang forever on a broken session.
+                // 复用有界属性线程池 + 挂起会话熔断机制 ——
+                // 这里直接调用 `op.get()` 会在损坏的会话上永久挂起。
                 let props = try_get_media_properties(&candidate);
                 let playback = candidate.GetPlaybackInfo().ok();
                 let is_current = current_session

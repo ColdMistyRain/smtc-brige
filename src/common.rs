@@ -5,7 +5,7 @@ use std::sync::LazyLock;
 use std::time::Instant;
 use unicode_normalization::UnicodeNormalization;
 
-// ── Types ───────────────────────────────────────────────────────────────────
+// ── 类型 ───────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LrcLine {
@@ -15,7 +15,7 @@ pub struct LrcLine {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SmtcStatus {
-    // Raw SMTC fields
+    // 原始 SMTC 字段
     pub ok: bool,
     pub connected: bool,
     #[serde(default)]
@@ -36,42 +36,38 @@ pub struct SmtcStatus {
     pub ncm_id: i64,
     pub position_ms: i64,
     pub duration_ms: i64,
-    // ── Position extrapolation ─────────────────────────────────────────
-    // The raw SMTC `Position` is only a snapshot that the player updates
-    // sporadically (NetEase Cloud Music desktop / web video in browsers
-    // update it rarely or not at all).  We keep the raw sample plus the
-    // info needed to extrapolate a "live" position as time passes.
+    // ── 位置外推 ─────────────────────────────────────────
+    // 原始 SMTC `Position` 只是播放器偶尔更新的快照
+    // （网易云音乐桌面版 / 浏览器中的网页视频几乎不更新或完全不更新）。
+    // 我们保留原始采样以及随时间外推"实时"位置所需的信息。
     #[serde(default)]
     pub position_base_ms: i64,
-    /// Unix ms timestamp when `position_base_ms` was last reported by the
-    /// player (SMTC `LastUpdatedTime`, or the time we sampled it).
+    /// `position_base_ms` 最后一次由播放器上报的 Unix 毫秒时间戳
+    /// （SMTC `LastUpdatedTime`，或我们采样时的时间）。
     #[serde(default)]
     pub position_updated_at: i64,
-    /// Effective playback rate used to extrapolate the live position
-    /// (0 when not Playing, so no extrapolation happens).
+    /// 用于外推实时位置的有效播放速率
+    /// （非播放状态时为 0，因此不会进行外推）。
     #[serde(default)]
     pub playback_rate: f64,
-    /// True when `position_ms` is extrapolated (live) rather than a raw
-    /// snapshot from the player.
+    /// 当 `position_ms` 是外推（实时）值而非播放器的原始快照时为 true。
     #[serde(default)]
     pub position_live: bool,
-    /// How `position_ms` was obtained: `"smtc"` (a real sample from the
-    /// player) or `"estimated"` (the bridge extrapolated from its own anchor
-    /// because the player reports no usable timeline, e.g. NetEase Cloud
-    /// Music reporting `Position=0`).
+    /// `position_ms` 的获取方式：`"smtc"`（来自播放器的真实采样）或
+    /// `"estimated"`（桥接服务依据自身锚点外推，因为播放器不报告可用时间线，
+    /// 例如网易云音乐上报 `Position=0`）。
     #[serde(default)]
     pub position_source: String,
     pub session_count: i32,
     pub selected_current: bool,
     pub updated_at: i64,
 
-    /// Every raw field reported by the SMTC session (Windows) / MPRIS player
-    /// (Linux), exposed verbatim so consumers can see all data the bridge
-    /// receives from the system transport controls.
+    /// SMTC 会话（Windows）/ MPRIS 播放器（Linux）上报的每一个原始字段，
+    /// 原样暴露，便于消费者查看桥接服务从系统媒体传输控件收到的全部数据。
     #[serde(default)]
     pub raw: RawSmtcInfo,
 
-    // Enriched fields
+    // 增强字段
     #[serde(default)]
     pub smtc_adapter: String,
     #[serde(default)]
@@ -84,13 +80,12 @@ pub struct SmtcStatus {
     pub lyric_source: String,
     #[serde(default)]
     pub lyric: LyricPosition,
-    /// Full lyrics of the current track (all lines), filled by the background
-    /// resolver — lets clients get the complete lyrics straight from `/status`
-    /// without a second request.
+    /// 当前曲目的完整歌词（全部行），由后台解析器填充 —— 客户端无需再次
+    /// 请求即可直接从 `/status` 获得完整歌词。
     #[serde(default)]
     pub full_lyrics: Vec<LrcLine>,
 
-    // Provider hints
+    // 提供商提示
     #[serde(default)]
     pub lyric_provider: String,
     #[serde(default)]
@@ -100,28 +95,28 @@ pub struct SmtcStatus {
     #[serde(default)]
     pub cover_id_text: String,
 
-    // QQ Music specific
+    // QQ 音乐专有字段
     pub qq_song_id: i64,
     #[serde(default)]
     pub qq_song_mid: String,
     #[serde(default)]
     pub qq_album_mid: String,
 
-    // Error fallback
+    // 错误回退
     #[serde(default)]
     pub error: String,
 }
 
-/// Verbatim raw data from the system media transport controls session
-/// (Windows SMTC) or the MPRIS player (Linux).  All values are exactly what
-/// the OS/player reported; the bridge does not transform them here.
+/// 来自系统媒体传输控件会话（Windows SMTC）或 MPRIS 播放器（Linux）的
+/// 原始数据。所有值都是操作系统/播放器上报的原始内容；桥接服务在此
+/// 不做任何转换。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RawSmtcInfo {
-    // ── Session ─────────────────────────────────────────────────────────
+    // ── 会话 ─────────────────────────────────────────────────────────
     #[serde(default)]
     pub source_app_user_model_id: String,
 
-    // ── Playback info ───────────────────────────────────────────────────
+    // ── 播放信息 ───────────────────────────────────────────────────
     #[serde(default)]
     pub playback_status: String,
     #[serde(default)]
@@ -133,7 +128,7 @@ pub struct RawSmtcInfo {
     #[serde(default)]
     pub shuffle_active: Option<bool>,
 
-    // ── Timeline (raw 100ns ticks, except `last_updated_unix_ms`) ───────
+    // ── 时间线（原始 100ns 刻度，除 `last_updated_unix_ms` 外） ───────
     #[serde(default)]
     pub start_time_ticks: i64,
     #[serde(default)]
@@ -147,7 +142,7 @@ pub struct RawSmtcInfo {
     #[serde(default)]
     pub last_updated_unix_ms: i64,
 
-    // ── Media properties ────────────────────────────────────────────────
+    // ── 媒体属性 ────────────────────────────────────────────────
     #[serde(default)]
     pub title: String,
     #[serde(default)]
@@ -163,7 +158,7 @@ pub struct RawSmtcInfo {
     #[serde(default)]
     pub thumbnail_available: bool,
 
-    // ── Playback controls (which actions the player allows) ─────────────
+    // ── 播放控制（播放器允许的动作） ─────────────
     #[serde(default)]
     pub is_play_enabled: Option<bool>,
     #[serde(default)]
@@ -188,7 +183,7 @@ pub struct RawSmtcInfo {
     pub is_playback_position_enabled: Option<bool>,
 }
 
-/// Current wall-clock time as Unix epoch milliseconds.
+/// 当前墙钟时间，单位 Unix 纪元毫秒。
 pub fn unix_now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -196,25 +191,24 @@ pub fn unix_now_ms() -> i64 {
         .as_millis() as i64
 }
 
-/// Persistent anchor used to keep the playback position "ticking" for players
-/// whose SMTC session does not report a usable timeline (e.g. NetEase Cloud
-/// Music reports `Position=0` and `EndTime=0` while still refreshing
-/// `LastUpdatedTime`).  The bridge extrapolates `position + (now - time) * rate`
-/// from this anchor between raw SMTC samples.
+/// 持久化锚点，用于让 SMTC 会话不报告可用时间线的播放器（例如网易云音乐
+/// 上报 `Position=0` 和 `EndTime=0`，同时仍在刷新 `LastUpdatedTime`）的
+/// 播放位置持续"走动"。桥接服务在两次原始 SMTC 采样之间依据该锚点
+/// 外推 `position + (now - time) * rate`。
 #[derive(Debug, Clone)]
 pub struct PositionAnchor {
-    /// Identity of the track this anchor belongs to (`source|title|artist|album`).
+    /// 该锚点所属曲目的标识（`source|title|artist|album`）。
     pub track_key: String,
-    /// Base position in ms as of `time_ms`.
+    /// 截至 `time_ms` 时的基准位置（毫秒）。
     pub position_ms: i64,
-    /// Unix ms timestamp of `position_ms`.
+    /// `position_ms` 的 Unix 毫秒时间戳。
     pub time_ms: i64,
 }
 
 impl PositionAnchor {
-    /// Extrapolate the live position at `now_ms` (unix ms) for a track playing
-    /// at `rate` (0 = frozen) and lasting `duration_ms` (0 = unknown).
-    /// The result is clamped to `[0, duration_ms]`.
+    /// 为以 `rate`（0 = 冻结）播放、时长为 `duration_ms`（0 = 未知）的曲目，
+    /// 外推 `now_ms`（unix 毫秒）时刻的实时位置。
+    /// 结果被限制在 `[0, duration_ms]` 范围内。
     pub fn live_position_ms(&self, now_ms: i64, rate: f64, duration_ms: i64) -> i64 {
         let elapsed = (now_ms - self.time_ms).max(0) as f64;
         let live = (self.position_ms as f64 + elapsed * rate).max(0.0);
@@ -226,14 +220,13 @@ impl PositionAnchor {
     }
 }
 
-/// Return a copy of `status` whose `position_ms` is extrapolated to "now"
-/// using the last SMTC position sample, its timestamp and the playback rate.
+/// 返回 `status` 的一个副本，其 `position_ms` 使用最后一次 SMTC 位置采样、
+/// 采样时间戳与播放速率外推到"当前时刻"。
 ///
-/// Many players (NetEase Cloud Music desktop, browsers playing web video)
-/// only push a position snapshot occasionally, so the raw SMTC `Position`
-/// appears frozen.  Using `Position + (now - LastUpdatedTime) * rate` keeps
-/// the progress bar moving between samples.  Nothing is extrapolated while
-/// paused/stopped, and the result is clamped to the track duration.
+/// 许多播放器（网易云音乐桌面版、播放网页视频的浏览器）只会偶尔推送一次
+/// 位置快照，因此原始 SMTC `Position` 看起来像是冻结的。使用
+/// `Position + (now - LastUpdatedTime) * rate` 可以让进度条在两次采样之间
+/// 保持移动。暂停/停止时不进行任何外推，结果被限制在曲目时长内。
 pub fn with_live_position(status: &SmtcStatus) -> SmtcStatus {
     let mut s = status.clone();
     if s.state == "Playing" && s.playback_rate > 0.0 && s.position_updated_at > 0 {
@@ -321,7 +314,7 @@ impl<T> CacheEntry<T> {
     }
 }
 
-/// Sweep expired entries from a HashMap cache. Returns the new size.
+/// 从 HashMap 缓存中清扫过期的条目。返回新的容量大小。
 pub fn sweep_cache<K: std::cmp::Eq + std::hash::Hash, V>(
     cache: &mut HashMap<K, CacheEntry<V>>,
     ttl_ms: u64,
@@ -330,8 +323,8 @@ pub fn sweep_cache<K: std::cmp::Eq + std::hash::Hash, V>(
     cache.len()
 }
 
-/// Insert with eviction: sweep expired, then if still over limit, remove
-/// arbitrary old entries to stay under max_entries.
+/// 带淘汰的插入：先清扫过期条目，若仍超出上限，则移除任意旧条目
+/// 以保持在 max_entries 以内。
 pub fn cache_insert_limited<K, V>(
     cache: &mut HashMap<K, CacheEntry<V>>,
     key: K,
@@ -341,9 +334,9 @@ pub fn cache_insert_limited<K, V>(
 ) where
     K: std::cmp::Eq + std::hash::Hash,
 {
-    // First, sweep expired entries.
+    // 首先，清扫过期条目。
     sweep_cache(cache, ttl_ms);
-    // If still over limit, evict oldest (by insertion time) down to 75% of max.
+    // 若仍超出上限，则按插入时间淘汰最旧的条目，降至上限的 75%。
     if cache.len() >= max_entries {
         let target = max_entries * 3 / 4;
         let mut vec: Vec<_> = cache.drain().collect();
@@ -355,19 +348,19 @@ pub fn cache_insert_limited<K, V>(
     cache.insert(key, entry);
 }
 
-/// Max entries per individual cache to prevent unbounded memory growth.
+/// 每个独立缓存的最大条目数，防止内存无限制增长。
 pub const MAX_CACHE_ENTRIES: usize = 512;
 
-// ── Constants ───────────────────────────────────────────────────────────────
+// ── 常量 ───────────────────────────────────────────────────────────────
 
 pub const EDGE_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0";
 
-// ── LRC Parser ──────────────────────────────────────────────────────────────
+// ── LRC 解析器 ──────────────────────────────────────────────────────────────
 
 static LRC_TIMESTAMP_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]").unwrap());
 
-// ── Precompiled Regexes ────────────────────────────────────────────────────
+// ── 预编译正则表达式 ────────────────────────────────────────────────────
 
 static ARTIST_SPLIT_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\s*(?:/|&|,|，|;|；|\band\b|、)\s*").unwrap());
@@ -383,7 +376,7 @@ static TITLE_ARTIST_RE: LazyLock<Regex> =
 pub fn parse_lrc(raw: &str) -> Vec<LrcLine> {
     let mut lines: Vec<LrcLine> = Vec::new();
     for line in raw.lines() {
-        // Strip all timestamp brackets to get the lyric text.
+        // 去掉所有时间戳方括号，得到歌词文本。
         let text = LRC_TIMESTAMP_RE.replace_all(line, "").trim().to_string();
         if text.is_empty() {
             continue;
@@ -439,7 +432,7 @@ pub fn merge_translation(primary: &[LrcLine], translation: &[LrcLine]) -> Vec<Lr
         .collect()
 }
 
-// ── Text Utilities ──────────────────────────────────────────────────────────
+// ── 文本工具 ──────────────────────────────────────────────────────────
 
 pub fn normalize_text(value: &str) -> String {
     value
@@ -484,11 +477,11 @@ pub fn search_score(
         score += 45;
     }
 
-    // Pre-normalize song artists so each is only normalised once.
+    // 预先归一化歌曲艺人，使每个艺人只被归一化一次。
     let song_artists_norm: Vec<String> = song_artists.iter().map(|a| normalize_text(a)).collect();
 
-    // Match JS behaviour: for each expected artist, add score at most once
-    // (exact match takes precedence over partial for that expected artist).
+    // 匹配 JS 行为：对每个期望的艺人，至多加一次分
+    // （对于该期望艺人，精确匹配优先于部分匹配）。
     for expected in split_artists(&artist) {
         let exact_match = song_artists_norm.contains(&expected);
         if exact_match {
@@ -544,7 +537,7 @@ pub fn maybe_base64_text(value: &str) -> String {
     if text.is_empty() || text.contains('[') {
         return text.to_string();
     }
-    // Check if it looks like base64
+    // 检查它是否看起来像 base64
     if text.chars().any(|c| {
         !c.is_ascii_alphanumeric() && c != '+' && c != '/' && c != '=' && !c.is_whitespace()
     }) {
@@ -561,7 +554,7 @@ pub fn maybe_base64_text(value: &str) -> String {
 }
 
 pub fn lyric_at(lines: &[LrcLine], position_ms: u64) -> LyricPosition {
-    // Binary search — lines are sorted by at_ms.
+    // 二分查找 —— 歌词行按 at_ms 排序。
     let i = lines.partition_point(|line| line.at_ms <= position_ms);
     let index: i32 = if i > 0 { (i - 1) as i32 } else { -1 };
 
@@ -628,7 +621,7 @@ pub fn infer_track_metadata(status: &mut SmtcStatus) {
     }
 }
 
-/// Percent-encode a string (same logic in JS `encodeURIComponent`).
+/// 对字符串进行百分号编码（与 JS `encodeURIComponent` 逻辑相同）。
 pub fn urlencoding(s: &str) -> String {
     let mut result = String::new();
     for byte in s.as_bytes() {
@@ -710,9 +703,9 @@ mod tests {
         assert_eq!(anchor.live_position_ms(6_000, 1.0, 0), 6_000);
         assert_eq!(anchor.live_position_ms(6_000, 1.0, 5_000), 5_000);
         assert_eq!(anchor.live_position_ms(6_000, 0.0, 0), 1_000);
-        // Clock going backwards must not produce a negative position.
+        // 时钟回拨不能产生负的位置。
         assert_eq!(anchor.live_position_ms(500, 1.0, 0), 1_000);
-        // 2x playback rate.
+        // 2 倍播放速率。
         assert_eq!(anchor.live_position_ms(3_000, 2.0, 0), 5_000);
     }
 

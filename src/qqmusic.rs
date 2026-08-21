@@ -12,7 +12,7 @@ use crate::common::{
 };
 use crate::source::MusicSource;
 
-// ── QQ Cover URL helpers ────────────────────────────────────────────────────
+// ── QQ 封面 URL 辅助函数 ────────────────────────────────────────────────────
 
 fn qq_cover_url(album_mid: &str, size: u32) -> String {
     let mid = album_mid.trim();
@@ -32,7 +32,7 @@ fn qq_singer_cover_url(singer_mid: &str, size: u32) -> String {
     format!("https://y.qq.com/music/photo_new/T001R{size}x{size}M000{encoded}.jpg?max_age=2592000")
 }
 
-// ── QQ Song ─────────────────────────────────────────────────────────────────
+// ── QQ 歌曲 ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct QQSong {
@@ -47,14 +47,14 @@ pub struct QQSong {
     pub cover_url: String,
 }
 
-// ── Precompiled Regexes ────────────────────────────────────────────────────
+// ── 预编译正则表达式 ────────────────────────────────────────────────────
 
 static QQMUSIC_MATCH_RE: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"(?i)qqmusic|tencent").unwrap());
 static JSONP_CALLBACK_RE: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"^[\w$.]+\(([\s\S]*)\)\s*;?$").unwrap());
 
-// ── QQMusic Source ──────────────────────────────────────────────────────────
+// ── QQ 音乐源 ──────────────────────────────────────────────────────────
 
 pub struct QQMusicSource {
     pub lyric_cache: Arc<Mutex<HashMap<String, CacheEntry<LyricResult>>>>,
@@ -158,7 +158,7 @@ impl QQMusicSource {
             cover_url,
         };
 
-        // Update meta caches immediately (match JS eager caching in normalizeSong)
+        // 立即更新元数据缓存（与 normalizeSong 中的 JS 预缓存行为一致）
         let entry = CacheEntry::new(qq_song.clone());
         {
             let mut cache = self.meta_cache.lock().await;
@@ -216,14 +216,14 @@ impl QQMusicSource {
         log::debug!("qqmusic search: title={title:?} artist={artist:?}");
         let query = urlencoding(&format!("{title} {artist}"));
         let title_query = urlencoding(title);
-        // NOTE: c.y.qq.com's full parameter set (ct=24&qqmusic_ver=...&aggr=1&...)
-        // currently returns 0 results for every query, which made every QQ
-        // search fail and forced a slow NetEase fallback.  The minimal
-        // `format=json&platform=yqq.json&w=...` query works reliably.
+        // 注意：c.y.qq.com 的完整参数集（ct=24&qqmusic_ver=...&aggr=1&...）
+        // 目前对每个查询都返回 0 条结果，导致每次 QQ 搜索都失败，被迫走
+        // 慢速的网易云回退。最小化的 `format=json&platform=yqq.json&w=...`
+        // 查询则能稳定工作。
         let endpoints = [
-            // Full query (title + artist).
+            // 完整查询（标题 + 歌手）。
             format!("https://c.y.qq.com/soso/fcgi-bin/client_search_cp?format=json&platform=yqq.json&w={query}&n=8&p=1"),
-            // Fallback: title only (some titles match poorly with artist).
+            // 回退：仅标题（有些标题与歌手组合匹配效果较差）。
             format!("https://c.y.qq.com/soso/fcgi-bin/client_search_cp?format=json&platform=yqq.json&w={title_query}&n=8&p=1"),
         ];
 
@@ -484,7 +484,7 @@ impl QQMusicSource {
                 "current".to_string()
             };
 
-            // Meta cache already populated by normalize_song; no need to re-insert here.
+            // 元数据缓存已由 normalize_song 填充；此处无需重复插入。
 
             let found = self.fetch_lyrics(qq.id, &qq.mid).await;
             let cover_url = if qq.cover_url.is_empty() {
@@ -533,11 +533,11 @@ impl QQMusicSource {
     }
 }
 
-// ── JSONP Parsing ───────────────────────────────────────────────────────────
+// ── JSONP 解析 ───────────────────────────────────────────────────────────
 
 fn parse_loose_json(raw: &str) -> Result<serde_json::Value, serde_json::Error> {
     let text = raw.trim();
-    // Strip JSONP callback wrapper: callback({...});
+    // 剥离 JSONP 回调包装：callback({...});
     let text = if let Some(caps) = JSONP_CALLBACK_RE.captures(text) {
         caps[1].to_string()
     } else {

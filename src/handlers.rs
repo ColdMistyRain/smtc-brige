@@ -20,7 +20,7 @@ use crate::smtc::{resize_cover_jpeg, smtc_control, smtc_status_raw, smtc_thumbna
 use crate::source::MusicSource;
 use crate::state::AppState;
 
-// ── Source Helpers ──────────────────────────────────────────────────────────
+// ── 音乐源辅助函数 ──────────────────────────────────────────────────────────
 
 pub fn source_for_status(status: &SmtcStatus) -> &'static str {
     if is_qqmusic_source(&status.source) {
@@ -37,13 +37,12 @@ pub fn resolve_provider(provider: &str) -> &str {
     }
 }
 
-/// How often the "SMTC disconnected/error" warning is re-emitted.  The
-/// dashboard polls `/status` every 1.5s, so without throttling the log fills
-/// up while the player stays disconnected.
+/// "SMTC 断开/错误"警告的重新输出间隔。仪表盘每 1.5s 轮询一次 `/status`，
+/// 若不限流，播放器一直断开时日志会很快刷满。
 const DISCONNECT_LOG_INTERVAL: Duration = Duration::from_millis(DISCONNECT_LOG_INTERVAL_MS);
 
-/// Log `msg` at `level` at most once per `DISCONNECT_LOG_INTERVAL`; later
-/// occurrences are downgraded to debug so polling doesn't spam the log.
+/// 在 `DISCONNECT_LOG_INTERVAL` 间隔内最多以 `level` 记录一次 `msg`；
+/// 之后的记录降级为 debug，避免轮询刷屏日志。
 fn throttled_log(last: &mut Option<Instant>, level: log::Level, msg: String) {
     let due = last.is_none_or(|t| t.elapsed() >= DISCONNECT_LOG_INTERVAL);
     if due {
@@ -54,9 +53,9 @@ fn throttled_log(last: &mut Option<Instant>, level: log::Level, msg: String) {
     }
 }
 
-// ── Position Estimation ─────────────────────────────────────────────────────
+// ── 位置估算 ─────────────────────────────────────────────────────
 
-/// Identity string used to detect when the playing media changes.
+/// 用于检测播放媒体何时变化的标识字符串。
 fn position_track_key(status: &SmtcStatus) -> String {
     format!(
         "{}|{}|{}|{}",
@@ -64,18 +63,14 @@ fn position_track_key(status: &SmtcStatus) -> String {
     )
 }
 
-/// Keep the playback position moving for players whose SMTC timeline is
-/// unreliable (NetEase Cloud Music reports `Position=0` / `EndTime=0` while
-/// still refreshing `LastUpdatedTime`).
+/// 让 SMTC 时间线不可靠的播放器（网易云音乐上报 `Position=0` / `EndTime=0`，
+/// 同时仍在刷新 `LastUpdatedTime`）的播放位置保持移动。
 ///
-/// - A trustworthy raw sample (`position_base_ms > 0`) becomes the new anchor
-///   (QQ Music etc.), so its real position is used directly.
-/// - Otherwise the bridge keeps extrapolating from its own persistent anchor,
-///   resetting to 0 only when the media identity changes.
-/// - While paused/stopped the anchor is frozen, so resuming continues from
-///   where it left off (no jump ahead).
-/// - If the estimate reaches the track duration while still playing, the track
-///   most likely looped — restart the clock.
+/// - 可信的原始采样（`position_base_ms > 0`）会成为新锚点（QQ 音乐等），
+///   因此直接使用其真实位置。
+/// - 否则桥接服务会持续依据自身的持久锚点外推，仅在媒体标识变化时归零。
+/// - 暂停/停止时锚点冻结，因此恢复播放会从上次的位置继续（不会向前跳）。
+/// - 若仍在播放时估算值到达曲目时长，说明曲目很可能已循环 —— 重新计时。
 fn maintain_position(mut status: SmtcStatus, anchor: &mut Option<PositionAnchor>) -> SmtcStatus {
     if !status.connected || status.state.is_empty() || status.state == "none" {
         return status;
@@ -84,7 +79,7 @@ fn maintain_position(mut status: SmtcStatus, anchor: &mut Option<PositionAnchor>
     let now_ms = unix_now_ms();
     let key = position_track_key(&status);
 
-    // Effective extrapolation rate — only while actually playing.
+    // 有效外推速率 —— 仅在实际播放时生效。
     let rate = if status.state == "Playing" {
         if status.playback_rate > 0.0 {
             status.playback_rate
@@ -95,7 +90,7 @@ fn maintain_position(mut status: SmtcStatus, anchor: &mut Option<PositionAnchor>
         0.0
     };
 
-    // Load the anchor, resetting it when the media identity changed.
+    // 加载锚点，媒体标识变化时重置。
     let mut a = anchor.take().unwrap_or(PositionAnchor {
         track_key: key.clone(),
         position_ms: 0,
@@ -112,21 +107,21 @@ fn maintain_position(mut status: SmtcStatus, anchor: &mut Option<PositionAnchor>
 
     let trustworthy = status.position_base_ms > 0;
     if trustworthy {
-        // The player reported a real position — prefer it over our estimate.
+        // 播放器上报了真实位置 —— 优先使用它而非我们的估算值。
         a = PositionAnchor {
             track_key: key.clone(),
             position_ms: status.position_base_ms,
             time_ms: status.position_updated_at.max(0),
         };
     } else if status.state != "Playing" {
-        // Paused / stopped with no real sample → freeze the position.
+        // 暂停/停止且无真实采样 → 冻结位置。
         a.time_ms = now_ms;
     }
 
-    // Live position from the anchor.
+    // 依据锚点计算的实时位置。
     let mut live = a.live_position_ms(now_ms, rate, status.duration_ms) as f64;
 
-    // Track most likely looped → restart the clock.
+    // 曲目很可能已循环 → 重新计时。
     if status.state == "Playing" && status.duration_ms > 0 && live >= status.duration_ms as f64 {
         log::debug!("position: reached end while playing → looping anchor at 0");
         a = PositionAnchor {
@@ -152,12 +147,12 @@ fn maintain_position(mut status: SmtcStatus, anchor: &mut Option<PositionAnchor>
     status
 }
 
-// ── Status Enrichment ───────────────────────────────────────────────────────
+// ── 状态增强 ───────────────────────────────────────────────────────
 
 pub async fn enriched_status(state: &Arc<AppState>, force: bool) -> SmtcStatus {
     let now = Instant::now();
 
-    // ── cache hit (fast path, no lock contention) ────────────────────────
+    // ── 缓存命中（快速路径，无锁竞争） ────────────────────────
     if !force {
         let cache = state.status_cache.lock().await;
         if let Some((at, ref cached)) = *cache {
@@ -166,18 +161,16 @@ pub async fn enriched_status(state: &Arc<AppState>, force: bool) -> SmtcStatus {
                     "status cache hit (age: {}ms)",
                     now.duration_since(at).as_millis()
                 );
-                // Extrapolate position so progress keeps moving between
-                // raw SMTC samples even on cached responses.
+                // 外推位置，使缓存响应在两次原始 SMTC 采样之间进度仍持续移动。
                 return with_live_position(cached);
             }
         }
     }
 
-    // ── serialised fetch to avoid stampeding SMTC / lyrics APIs ────────
+    // ── 串行化抓取，避免冲击 SMTC / 歌词 API ────────
     let _guard = state.fetch_mutex.lock().await;
 
-    // Double-check: another request may have already populated the cache
-    // while we were waiting for the mutex.
+    // 二次检查：等待互斥锁期间，另一个请求可能已经填充了缓存。
     if !force {
         let cache = state.status_cache.lock().await;
         if let Some((at, ref cached)) = *cache {
@@ -200,8 +193,8 @@ pub async fn enriched_status(state: &Arc<AppState>, force: bool) -> SmtcStatus {
                 status.ncm_id
             );
 
-            // Use the live (extrapolated) position so lyrics and progress
-            // reflect "now" rather than the last snapshot the player pushed.
+            // 使用实时（外推）位置，让歌词与进度反映"当前时刻"而非播放器
+            // 推送的最后一次快照。
             status = with_live_position(&status);
 
             if status.connected {
@@ -213,8 +206,8 @@ pub async fn enriched_status(state: &Arc<AppState>, force: bool) -> SmtcStatus {
                 };
                 let source_name = source_for_status(&status);
 
-                // Maintain a persistent position anchor so progress keeps
-                // moving for players that report no usable SMTC timeline.
+                // 维护持久的位置锚点，让不报告可用 SMTC 时间线的播放器
+                // 进度保持移动。
                 {
                     let mut anchor = state.position_anchor.lock().await;
                     status = maintain_position(status, &mut anchor);
@@ -226,7 +219,7 @@ pub async fn enriched_status(state: &Arc<AppState>, force: bool) -> SmtcStatus {
                     String::new()
                 };
 
-                // Provider hints — computed locally, never via network here.
+                // 提供商提示 —— 本地计算，此处绝不通过网络获取。
                 status.lyric_provider = source_name.to_string();
                 status.lyric_id_text = if source_name == "netease" {
                     status.ncm_id_text.clone()
@@ -234,12 +227,10 @@ pub async fn enriched_status(state: &Arc<AppState>, force: bool) -> SmtcStatus {
                     String::new()
                 };
 
-                // ── Lyrics ─────────────────────────────────────────────
-                // Served from the background cache only.  Lyric resolution is
-                // decoupled from `/status`: slow lyric APIs (e.g. QQ search
-                // stalling ~5s) used to block the response and starve
-                // short-timeout clients (ESP32) until the web dashboard's
-                // polling warmed the caches.
+                // ── 歌词 ─────────────────────────────────────────────
+                // 仅从后台缓存提供。歌词解析与 `/status` 解耦：慢速歌词 API
+                // （例如 QQ 搜索卡住约 5s）曾导致响应阻塞、饿死短超时客户端
+                // （ESP32），直到网页仪表盘的轮询预热了缓存。
                 let track_key = position_track_key(&status);
                 let cached_lyric: Option<(LyricResult, MetaInfo)> = {
                     let cache = state.lyric_cache.lock().await;
@@ -262,17 +253,14 @@ pub async fn enriched_status(state: &Arc<AppState>, force: bool) -> SmtcStatus {
                 status.translation_line_count = lyric.translation_line_count;
                 status.lyric_source = lyric.source;
                 status.lyric = lyric_at(&lyric.lines, status.position_ms.max(0) as u64);
-                // Expose the full lyrics on `/status` so clients (ESP32) get
-                // everything in one request.
+                // 在 `/status` 上暴露完整歌词，让客户端（ESP32）一次请求拿到全部。
                 status.full_lyrics = lyric.lines.clone();
 
-                // Cover identity: title+artist alone collide for tracks with
-                // the same/empty title (this made e.g. 《模特》 show the
-                // cached cover of another track).  Include source + album too,
-                // which are already known at SMTC sample time — so the id is
-                // stable across the background lyric resolution (a cover id
-                // that changed after resolution made clients download & flash
-                // the cover twice).
+                // 封面标识：仅用标题+歌手会对相同/空标题的曲目产生碰撞
+                // （这曾导致例如《模特》显示另一首曲目的缓存封面）。
+                // 额外包含源与专辑，这些在 SMTC 采样时已知 —— 因此该 id
+                // 在后台歌词解析期间保持稳定（解析后变化的封面 id 曾使客户端
+                // 下载并闪烁封面两次）。
                 let cover_id = {
                     let mut h = std::collections::hash_map::DefaultHasher::new();
                     status.source.hash(&mut h);
@@ -285,11 +273,10 @@ pub async fn enriched_status(state: &Arc<AppState>, force: bool) -> SmtcStatus {
                 status.cover_id_text = format!("{cover_id}");
                 status.cover_url = format!("/cover?provider=smtc&id={cover_id}&size=96");
 
-                // Expose the resolved track id so clients (e.g. ESP32) can
-                // build a `/lyrics` request with a real id.  The front-end has
-                // no QQ song id (SMTC doesn't expose it) and NetEase may only
-                // be known after a background search — both come back here
-                // from the cached `MetaInfo`.
+                // 暴露已解析的曲目 id，让客户端（例如 ESP32）能用真实 id
+                // 构造 `/lyrics` 请求。前端没有 QQ 歌曲 id（SMTC 不暴露），
+                // 而网易云可能只在后台搜索后才得知 —— 两者都会从缓存中的
+                // `MetaInfo` 回到这里。
                 if meta.id > 0 {
                     if source_name == "qqmusic" {
                         status.lyric_id_text = meta.id.to_string();
@@ -298,8 +285,8 @@ pub async fn enriched_status(state: &Arc<AppState>, force: bool) -> SmtcStatus {
                     }
                 }
 
-                // Fill duration from cached metadata when the player doesn't
-                // report one (NetEase reports EndTime=0).
+                // 当播放器不报告时长时（网易云上报 EndTime=0），从缓存的
+                // 元数据填充。
                 if status.duration_ms <= 0 && meta.duration_ms > 0 {
                     log::debug!(
                         "SMTC duration=0 — using cached duration {}ms",
@@ -308,28 +295,27 @@ pub async fn enriched_status(state: &Arc<AppState>, force: bool) -> SmtcStatus {
                     status.duration_ms = meta.duration_ms as i64;
                 }
 
-                // Only kick off a background resolution when there is no fresh
-                // cached entry.  Empty results are cached too, so tracks that
-                // genuinely have no lyrics are not re-resolved on every poll
-                // (which kept `/status` returning "no lyrics" and clients
-                // showing "Loading lyrics" forever).
+                // 仅在没有新鲜缓存条目时才启动后台解析。空结果也会被缓存，
+                // 因此真正没有歌词的曲目不会在每次轮询时重复解析
+                // （否则 `/status` 一直返回"无歌词"，客户端永远显示
+                // "歌词加载中"）。
                 if cached_lyric.is_none() {
                     spawn_lyric_resolution(state, track_key, status.clone()).await;
                 }
 
-                // Persist as last-known-good for disconnected-fallback.
+                // 持久化为"最后已知可用"状态，供断开时回退。
                 {
                     let mut last = state.last_known_status.lock().await;
                     *last = Some(status.clone());
                 }
             } else {
-                // ── Disconnected → serve last-known-good if fresh enough ──
+                // ── 断开连接 → 若足够新鲜则返回最后已知可用状态 ──
                 status.lyrics_available = false;
                 status.lyric = LyricPosition::default();
 
                 let last = state.last_known_status.lock().await;
                 if let Some(ref last_status) = *last {
-                    // Rate-limited warning — the dashboard polls every 1.5s.
+                    // 限流警告 —— 仪表盘每 1.5s 轮询一次。
                     {
                         let mut warn_at = state.disconnect_log_at.lock().await;
                         throttled_log(
@@ -342,9 +328,9 @@ pub async fn enriched_status(state: &Arc<AppState>, force: bool) -> SmtcStatus {
                         );
                     }
                     let mut fallback = last_status.clone();
-                    // Let the caller distinguish stale data.
-                    // We reuse the `connected` field: keep it false so
-                    // consumers can still react.
+                    // 让调用方能够区分过期数据。
+                    // 复用 `connected` 字段：保持为 false，
+                    // 使消费者仍能据此做出反应。
                     fallback.connected = false;
                     fallback.state = format!("{} (stale)", fallback.state);
 
@@ -356,12 +342,12 @@ pub async fn enriched_status(state: &Arc<AppState>, force: bool) -> SmtcStatus {
 
             let mut cache = state.status_cache.lock().await;
             *cache = Some((now, status.clone()));
-            // Re-extrapolate with the freshest clock — the lyric fetch above
-            // may have taken long enough for the position to drift.
+            // 用最新的时钟重新外推 —— 上面的歌词抓取可能耗时较长，
+            // 导致位置发生漂移。
             with_live_position(&status)
         }
         Err(e) => {
-            // Rate-limited error — the dashboard polls every 1.5s.
+            // 限流错误 —— 仪表盘每 1.5s 轮询一次。
             {
                 let mut warn_at = state.disconnect_log_at.lock().await;
                 throttled_log(
@@ -371,7 +357,7 @@ pub async fn enriched_status(state: &Arc<AppState>, force: bool) -> SmtcStatus {
                 );
             }
 
-            // Try returning last-known-good before giving up entirely.
+            // 彻底放弃前，先尝试返回"最后已知可用"状态。
             let last = state.last_known_status.lock().await;
             if let Some(ref last_status) = *last {
                 {
@@ -407,13 +393,12 @@ pub async fn enriched_status(state: &Arc<AppState>, force: bool) -> SmtcStatus {
     }
 }
 
-/// Kick off a background lyric resolution for `track_key` unless one is
-/// already in flight.  The result lands in `AppState::lyric_cache`, so the
-/// next `/status` poll serves lyrics without blocking on slow lyric APIs
-/// (e.g. QQ search stalling ~5s, which used to stall `/status` and starve
-/// short-timeout clients such as ESP32).
+/// 为 `track_key` 启动一次后台歌词解析，除非已有一个正在执行。结果会写入
+/// `AppState::lyric_cache`，因此下一次 `/status` 轮询即可直接返回歌词，
+/// 无需阻塞在慢速歌词 API 上（例如 QQ 搜索卡住约 5s，曾导致 `/status`
+/// 卡顿并饿死 ESP32 等短超时客户端）。
 async fn spawn_lyric_resolution(state: &Arc<AppState>, track_key: String, status: SmtcStatus) {
-    // Dedup: only one in-flight resolution per track.
+    // 去重：每首曲目只有一个正在执行的解析任务。
     {
         let mut fetching = state.lyric_fetching.lock().await;
         if fetching.contains(&track_key) {
@@ -456,7 +441,7 @@ async fn spawn_lyric_resolution(state: &Arc<AppState>, track_key: String, status
             working.title
         );
 
-        // Cache the result (even empty, to avoid re-resolving every poll).
+        // 缓存结果（即使为空也要缓存，避免每次轮询都重新解析）。
         {
             let mut cache = state.lyric_cache.lock().await;
             cache_insert_limited(
@@ -471,7 +456,7 @@ async fn spawn_lyric_resolution(state: &Arc<AppState>, track_key: String, status
     });
 }
 
-// ── JSON / Binary Response Helpers ──────────────────────────────────────────
+// ── JSON / 二进制响应辅助函数 ──────────────────────────────────────────
 
 fn send_json<T: serde::Serialize>(value: &T) -> Response {
     json_response(StatusCode::OK, value)
@@ -479,7 +464,7 @@ fn send_json<T: serde::Serialize>(value: &T) -> Response {
 
 fn json_response<T: serde::Serialize>(status: StatusCode, value: &T) -> Response {
     let body = serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string());
-    // CORS headers are added centrally by `tower_http::cors::CorsLayer`.
+    // CORS 响应头由 `tower_http::cors::CorsLayer` 集中添加。
     Response::builder()
         .status(status)
         .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
@@ -495,7 +480,7 @@ fn binary_response(body: Vec<u8>, content_type: &str, cache: bool) -> Response {
     } else {
         "no-store"
     };
-    // CORS headers are added centrally by `tower_http::cors::CorsLayer`.
+    // CORS 响应头由 `tower_http::cors::CorsLayer` 集中添加。
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, content_type)
@@ -610,7 +595,7 @@ refresh();setInterval(refresh,1500)
     )
 }
 
-// ── Cover Helpers ───────────────────────────────────────────────────────────
+// ── 封面辅助函数 ───────────────────────────────────────────────────────────
 
 async fn fetch_cover_buffer(
     client: &reqwest::Client,
@@ -650,7 +635,7 @@ async fn fetch_cover_buffer(
     Ok((body.to_vec(), detected_type))
 }
 
-// ── Route Handlers ──────────────────────────────────────────────────────────
+// ── 路由处理器 ──────────────────────────────────────────────────────────
 
 #[derive(Deserialize, Default)]
 pub struct StatusQuery {
@@ -693,10 +678,9 @@ pub async fn handle_lyrics(
         if id_text.is_empty() {
             let status = enriched_status(&state, params.fresh.as_deref() == Some("1")).await;
 
-            // Prefer the background-resolved lyrics for the current track.
-            // The front-end never has the QQ song id/mid (SMTC doesn't expose
-            // it), so falling back to `fetch_lyrics(0, "")` would always
-            // return empty lyrics for QQ Music.
+            // 优先使用当前曲目已后台解析的歌词。
+            // 前端永远没有 QQ 歌曲 id/mid（SMTC 不暴露它），
+            // 因此回退到 `fetch_lyrics(0, "")` 对 QQ 音乐总会返回空歌词。
             let track_key = position_track_key(&status);
             let cached = {
                 let cache = state.lyric_cache.lock().await;
@@ -760,9 +744,8 @@ pub async fn handle_lyrics(
     }
 }
 
-/// Return the full lyrics of the *currently playing* track, with no parameters
-/// needed.  Serves the background-resolved result; when the resolution hasn't
-/// finished yet it returns `loading: true` (the caller can retry shortly).
+/// 返回*当前正在播放*曲目的完整歌词，无需任何参数。提供后台解析的结果；
+/// 当解析尚未完成时返回 `loading: true`（调用方可稍后重试）。
 #[derive(Deserialize, Default)]
 pub struct LyricsNowQuery {
     pub fresh: Option<String>,
@@ -841,8 +824,7 @@ pub async fn handle_cover(
                 .unwrap_or(COVER_SIZE_DEFAULT)
                 .clamp(COVER_SIZE_MIN, COVER_SIZE_MAX);
             log::debug!("cover: smtc thumbnail (size={size})");
-            // Key the thumbnail cache per cover id so switching tracks never
-            // serves the previous track's thumbnail.
+            // 按封面 id 键控缩略图缓存，使切歌时绝不会返回上一首歌的缩略图。
             let cache_key = format!("smtc:{id_text}:{size}");
             {
                 let cache = state.thumbnail_cache.lock().await;
@@ -858,8 +840,8 @@ pub async fn handle_cover(
                 (StatusCode::NOT_FOUND, e)
             })?;
             let body_len = body.len();
-            // Image decode + Lanczos resize + JPEG encode is CPU-heavy — run
-            // it on the blocking pool instead of the async worker threads.
+            // 图片解码 + Lanczos 缩放 + JPEG 编码属于 CPU 密集型 —— 应在阻塞
+            // 线程池上执行，而非异步工作线程。
             let resized = tokio::task::spawn_blocking(move || resize_cover_jpeg(&body, size))
                 .await
                 .map_err(|e| {
@@ -924,8 +906,7 @@ pub async fn handle_control(
     let state_clone = state.clone();
     let action_clone = action.clone();
 
-    // Serialise control operations — SMTC does not handle concurrent
-    // play/pause/seek gracefully.
+    // 串行化控制操作 —— SMTC 不能优雅地处理并发的播放/暂停/快进快退。
     tokio::spawn(async move {
         let _guard = state_clone.control_lock.lock().await;
         match smtc_control(&action_clone, SEEK_MS).await {
@@ -935,9 +916,9 @@ pub async fn handle_control(
                 *cache = None;
             }
             Err(e) => {
-                // Don't write an error status into the cache — that would make
-                // the next /status poll report a fake playback error.  Just log
-                // it; the next status fetch reflects the real player state.
+                // 不要把错误状态写入缓存 —— 否则下一次 /status 轮询会报告
+                // 虚假的播放错误。仅记录日志；下一次状态抓取会反映真实的
+                // 播放器状态。
                 log::error!("SMTC control {action_clone} failed: {e}");
             }
         }
@@ -953,7 +934,7 @@ pub async fn handle_health() -> Response {
 }
 
 pub async fn handle_options() -> Response {
-    // Preflight responses get their CORS headers from `CorsLayer`.
+    // 预检响应从 `CorsLayer` 获取其 CORS 响应头。
     Response::builder()
         .status(StatusCode::NO_CONTENT)
         .body(Body::empty())
@@ -977,7 +958,7 @@ pub async fn handle_catch_all(method: Method) -> Response {
 
 pub async fn handle_shutdown(State(state): State<Arc<AppState>>) -> Response {
     log::info!("shutdown requested");
-    // Signal `main` to drain connections and exit gracefully.
+    // 通知 `main` 排空连接并优雅退出。
     let _ = state.shutdown.send(true);
     send_json(&serde_json::json!({"ok":true,"message":"shutting down"}))
 }

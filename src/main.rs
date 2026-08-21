@@ -20,7 +20,7 @@ use tower_http::cors::CorsLayer;
 
 #[tokio::main]
 async fn main() {
-    // ── Log rotation ─────────────────────────────────────────────────────
+    // ── 日志轮转 ─────────────────────────────────────────────────────
     const LOG_PATH: &str = "smtc-bridge.log";
     const MAX_LOG_BYTES: u64 = 10 * 1024 * 1024; // 10 MiB
 
@@ -64,11 +64,11 @@ async fn main() {
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let state = Arc::new(AppState::new(shutdown_tx));
 
-    // ── Background cache sweeper ─────────────────────────────────────────
+    // ── 后台缓存清扫任务 ─────────────────────────────────────────
     {
         let state = state.clone();
         tokio::spawn(async move {
-            // Sweep every 5 minutes to keep caches lean.
+            // 每 5 分钟清扫一次，保持缓存精简。
             let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(300));
             loop {
                 interval.tick().await;
@@ -88,12 +88,12 @@ async fn main() {
         .route("/shutdown", get(handle_shutdown))
         .fallback(axum::routing::any(handle_catch_all))
         .with_state(state)
-        // Central CORS handling (replaces the per-response headers).
+        // 集中处理 CORS（替代在单个响应上手动添加响应头）。
         .layer(CorsLayer::permissive());
 
     let addr = format!("{}:{}", config::HOST.as_str(), *config::PORT);
-    // Print 127.0.0.1 for wildcard binds so the URL can be copy-pasted into a
-    // browser; the service itself keeps listening on the configured address.
+    // 通配绑定（0.0.0.0/::）时打印 127.0.0.1，方便把 URL 直接复制到浏览器；
+    // 服务本身仍监听配置的地址。
     let display_host = if config::HOST.as_str() == "0.0.0.0" || config::HOST.as_str() == "::" {
         "127.0.0.1"
     } else {

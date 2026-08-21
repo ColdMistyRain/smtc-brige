@@ -1,4 +1,4 @@
-// Linux MPRIS implementation via D-Bus.
+// 通过 D-Bus 的 Linux MPRIS 实现。
 use std::collections::HashMap;
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -11,7 +11,7 @@ use crate::common::{RawSmtcInfo, SmtcStatus};
 static NCM_ID_RE: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"^NCM-(\d+)$").unwrap());
 
-// ── Helpers ─────────────────────────────────────────────────────────────────
+// ── 辅助函数 ─────────────────────────────────────────────────────────────────
 
 fn variant_to_string(v: &dbus::arg::Variant<Box<dyn dbus::arg::RefArg>>) -> String {
     v.0.as_str().map(|s| s.to_string()).unwrap_or_default()
@@ -51,12 +51,12 @@ fn read_player_info(conn: &Connection, bus_name: &str) -> Option<PlayerInfo> {
         Duration::from_millis(2000),
     );
 
-    // Read PlaybackStatus
+    // 读取 PlaybackStatus
     let state: String = proxy
         .get("org.mpris.MediaPlayer2.Player", "PlaybackStatus")
         .ok()?;
 
-    // Read Metadata
+    // 读取 Metadata
     let metadata: HashMap<String, dbus::arg::Variant<Box<dyn dbus::arg::RefArg>>> = proxy
         .get("org.mpris.MediaPlayer2.Player", "Metadata")
         .unwrap_or_default();
@@ -84,7 +84,7 @@ fn read_player_info(conn: &Connection, bus_name: &str) -> Option<PlayerInfo> {
         .map(|v| variant_to_i64(v, 0) as i32)
         .unwrap_or(0);
 
-    // mpris:length is in microseconds
+    // mpris:length 的单位是微秒
     let duration_ms = metadata
         .get("mpris:length")
         .map(|v| variant_to_i64(v, 0) / 1000)
@@ -95,14 +95,14 @@ fn read_player_info(conn: &Connection, bus_name: &str) -> Option<PlayerInfo> {
         .map(variant_to_string)
         .unwrap_or_default();
 
-    // Read Position
+    // 读取 Position
     let position_ms: i64 = proxy
         .get("org.mpris.MediaPlayer2.Player", "Position")
         .unwrap_or(0);
-    // Position is in microseconds
+    // Position 的单位是微秒
     let position_ms = position_ms / 1000;
 
-    // Extract NCM-{id} from genres (same as Windows)
+    // 从 genres 中提取 NCM-{id}（与 Windows 相同）
     let genres: Vec<String> = metadata
         .get("xesam:genre")
         .map(variant_to_string_list)
@@ -145,13 +145,13 @@ fn list_mpris_players(conn: &Connection) -> Vec<String> {
         .collect()
 }
 
-// ── Timeouts (mirror the Windows implementation) ────────────────────────────
+// ── 超时设置（与 Windows 实现保持一致） ────────────────────────────
 
 const STATUS_TIMEOUT: Duration = Duration::from_secs(8);
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(5);
 const THUMBNAIL_TIMEOUT: Duration = Duration::from_secs(6);
 
-// ── Status ──────────────────────────────────────────────────────────────────
+// ── 状态 ──────────────────────────────────────────────────────────────────
 
 pub async fn smtc_status_raw() -> Result<SmtcStatus, String> {
     let result = tokio::time::timeout(STATUS_TIMEOUT, async {
@@ -198,7 +198,7 @@ pub async fn smtc_status_raw() -> Result<SmtcStatus, String> {
                 if !info.title.is_empty() {
                     score += 20;
                 }
-                // Prefer players with cover art
+                // 优先选择带封面的播放器
                 if !info.cover_url.is_empty() {
                     score += 600;
                 }
@@ -231,8 +231,8 @@ pub async fn smtc_status_raw() -> Result<SmtcStatus, String> {
                         genres: info.genres,
                         ncm_id: info.ncm_id,
                         position_ms: info.position_ms,
-                        // MPRIS `Position` is also a snapshot; record the sample
-                        // time so `with_live_position` can keep progress moving.
+                        // MPRIS `Position` 同样是快照；记录采样时间，
+                        // 让 `with_live_position` 能保持进度移动。
                         position_base_ms: info.position_ms,
                         position_updated_at: now_ms,
                         playback_rate: if playing { 1.0 } else { 0.0 },
@@ -276,7 +276,7 @@ pub async fn smtc_status_raw() -> Result<SmtcStatus, String> {
     }
 }
 
-// ── Control ─────────────────────────────────────────────────────────────────
+// ── 控制 ─────────────────────────────────────────────────────────────────
 
 pub async fn smtc_control(action: &str, seek_ms: u64) -> Result<(), String> {
     let action = action.to_string();
@@ -284,7 +284,7 @@ pub async fn smtc_control(action: &str, seek_ms: u64) -> Result<(), String> {
         tokio::task::spawn_blocking(move || -> Result<(), String> {
             let conn = Connection::new_session().map_err(|e| format!("D-Bus session: {e}"))?;
 
-            // Find a playing player, or fall back to any MPRIS player.
+            // 查找正在播放的播放器，否则回退到任意 MPRIS 播放器。
             let players = list_mpris_players(&conn);
             let target = players
                 .iter()
@@ -315,9 +315,9 @@ pub async fn smtc_control(action: &str, seek_ms: u64) -> Result<(), String> {
                 "previous" => proxy.method_call("org.mpris.MediaPlayer2.Player", "Previous", ()),
                 "stop" => proxy.method_call("org.mpris.MediaPlayer2.Player", "Stop", ()),
                 "seek_forward" | "seek_back" => {
-                    // MPRIS `Seek` takes a *relative* offset in microseconds,
-                    // so `seek_back` must use a negative delta.
-                    let delta = (seek_ms as i64) * 1000; // ms -> us
+                    // MPRIS `Seek` 接受以微秒为单位的*相对*偏移，
+                    // 因此 `seek_back` 必须使用负增量。
+                    let delta = (seek_ms as i64) * 1000; // 毫秒 -> 微秒
                     let signed = if action == "seek_back" { -delta } else { delta };
                     proxy.method_call("org.mpris.MediaPlayer2.Player", "Seek", (signed,))
                 }
@@ -345,7 +345,7 @@ pub async fn smtc_control(action: &str, seek_ms: u64) -> Result<(), String> {
     }
 }
 
-// ── Thumbnail ───────────────────────────────────────────────────────────────
+// ── 缩略图 ───────────────────────────────────────────────────────────────
 
 pub async fn smtc_thumbnail() -> Result<(Vec<u8>, String), String> {
     let result = tokio::time::timeout(THUMBNAIL_TIMEOUT, async {
@@ -356,8 +356,8 @@ pub async fn smtc_thumbnail() -> Result<(Vec<u8>, String), String> {
             for bus_name in &players {
                 if let Some(info) = read_player_info(&conn, bus_name) {
                     if !info.cover_url.is_empty() && info.state == "Playing" {
-                        // The art URL is usually a local file:// or http(s):// URL.
-                        // For http(s), we return the URL as a string for the caller to fetch.
+                        // 封面 URL 通常是本地 file:// 或 http(s):// 形式的 URL。
+                        // 对于 http(s)，我们将 URL 作为字符串返回给调用方去获取。
                         if info.cover_url.starts_with("file://") {
                             let path = info
                                 .cover_url
@@ -367,7 +367,7 @@ pub async fn smtc_thumbnail() -> Result<(Vec<u8>, String), String> {
                                 std::fs::read(path).map_err(|e| format!("read file: {e}"))?;
                             return Ok((bytes, "image/jpeg".to_string()));
                         }
-                        // Return URL as pseudo-content-type for caller to handle
+                        // 将 URL 作为伪 content-type 返回，由调用方处理
                         return Err(format!("remote:{}", info.cover_url));
                     }
                 }
