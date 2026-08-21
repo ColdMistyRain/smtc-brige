@@ -32,7 +32,10 @@ fn main() {
         .set("FileVersion", &ver)
         .set("ProductVersion", &ver)
         .set("ProductName", "SMTC Bridge")
-        .set("FileDescription", "SMTC / MPRIS media bridge: status, lyrics, cover and remote control for LAN devices")
+        .set(
+            "FileDescription",
+            "SMTC / MPRIS media bridge: status, lyrics, cover and remote control for LAN devices",
+        )
         .set("OriginalFilename", "smtc-brige.exe")
         .set("CompanyName", "SMTC Bridge")
         .set("LegalCopyright", "Copyright (c) SMTC Bridge contributors")

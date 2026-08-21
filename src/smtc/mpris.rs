@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 use std::time::Duration;
 
+use dbus::blocking::stdintf::org_freedesktop_dbus::Properties;
 use dbus::blocking::Connection;
 
 use crate::common::{RawSmtcInfo, SmtcStatus};
@@ -30,7 +31,6 @@ fn variant_to_string_list(v: &dbus::arg::Variant<Box<dyn dbus::arg::RefArg>>) ->
 }
 
 struct PlayerInfo {
-    bus_name: String,
     title: String,
     artist: String,
     album: String,
@@ -115,7 +115,6 @@ fn read_player_info(conn: &Connection, bus_name: &str) -> Option<PlayerInfo> {
     };
 
     Some(PlayerInfo {
-        bus_name: bus_name.to_string(),
         title,
         artist,
         album,
@@ -304,7 +303,9 @@ pub async fn smtc_control(action: &str, seek_ms: u64) -> Result<(), String> {
                 Duration::from_millis(2000),
             );
 
-            match action.as_str() {
+            // 显式标注返回类型 R = ()，避免依赖 never-type fallback
+            // （Rust 2024 中 `dependency_on_unit_never_type_fallback` 是硬错误）。
+            let reply: Result<(), dbus::Error> = match action.as_str() {
                 "play" => proxy.method_call("org.mpris.MediaPlayer2.Player", "Play", ()),
                 "pause" => proxy.method_call("org.mpris.MediaPlayer2.Player", "Pause", ()),
                 "playpause" | "toggle" => {
@@ -321,8 +322,8 @@ pub async fn smtc_control(action: &str, seek_ms: u64) -> Result<(), String> {
                     proxy.method_call("org.mpris.MediaPlayer2.Player", "Seek", (signed,))
                 }
                 _ => return Err(format!("unknown action: {action}")),
-            }
-            .map_err(|e| format!("MPRIS {action}: {e}"))?;
+            };
+            reply.map_err(|e| format!("MPRIS {action}: {e}"))?;
 
             Ok(())
         })
