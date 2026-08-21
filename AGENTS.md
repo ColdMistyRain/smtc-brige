@@ -33,6 +33,7 @@ Linux MPRIS 暴露的"当前正在播放的媒体"信息，以 HTTP API 的形�
 | `state.rs` | `AppState`：`status_cache`、`thumbnail_cache`、`fetch_mutex`、`last_known_status`、`position_anchor`、`control_lock`、两个音乐源、共享 `reqwest::Client` |
 | `handlers.rs` | HTTP 路由处理器；`enriched_status` 编排 SMTC 采样→歌词解析→位置维护；`maintain_position` 位置锚点记账 |
 | `common.rs` | `SmtcStatus`/`RawSmtcInfo` 类型、LRC 解析、文本归一化、缓存工具（`CacheEntry`/`sweep_cache`/`cache_insert_limited`，上限 `MAX_CACHE_ENTRIES=512`） |
+| `build.rs`（项目根） | 仅 Windows 目标生效：用 `winres` 把 VERSIONINFO 资源嵌入 exe（文件属性→详细信息的 文件说明/版本/产品名/版权/语言），版本号自动取自 Cargo.toml `version`，无需手动同步 |
 | `netease.rs` | 网易云源：搜索、歌词、元数据（各带独立 TTL 缓存，实现 `MusicSource` trait） |
 | `qqmusic.rs` | QQ 音乐源：搜索、歌词、元数据（各带独立 TTL 缓存，实现 `MusicSource` trait） |
 | `source.rs` | `MusicSource` trait（async-trait）：`resolve`/`fetch_lyrics`/`sweep_caches`/`name`；`AppState.sources` 按序构成回退链 |
