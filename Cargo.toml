@@ -12,28 +12,30 @@ panic = "abort"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-axum = "0.7"
+axum = "0.8.9"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.12", features = ["json", "gzip", "deflate", "brotli"] }
+reqwest = { version = "0.13.4", features = ["json", "gzip", "deflate", "brotli"] }
 regex = "1"
-base64 = "0.22"
+base64 = "0.23.1"
 image = "0.25"
 unicode-normalization = "0.1"
-tower-http = { version = "0.5", features = ["cors"] }
-async-trait = "0.1"
-log = "0.4"
-fern = "0.6"
+tower-http = { version = "0.7.0", features = ["cors"] }
+async-trait = "0.1.92"
+log = "0.4.33"
+fern = "0.7.1"
 chrono = "0.4"
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.58", features = [
+windows = { version = "0.62.2", features = [
     "Media_Control",
     "Storage_Streams",
     "Foundation",
     "Foundation_Collections",
-] }
-
+] }# windows 0.62 将 `IAsyncOperation` 移入 windows-future crate（需与 windows 同系列的 0.3）
+windows-future = "0.3"
+# 在阻塞线程中驱动 WinRT 异步 Future（替代已移除的 `IAsyncOperation::get()`）
+futures-lite = "2"
 [target.'cfg(windows)'.build-dependencies]
 # 把版本/产品信息作为 VERSIONINFO 资源嵌入 Windows exe（见 build.rs）
-winres = "0.1.1"
+winres = "0.1.12"

@@ -4,7 +4,6 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Condvar, LazyLock, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 use windows::core::HSTRING;
-use windows::Foundation::IAsyncOperation;
 use windows::Media::Control::{
     GlobalSystemMediaTransportControlsSession, GlobalSystemMediaTransportControlsSessionManager,
     GlobalSystemMediaTransportControlsSessionMediaProperties,
@@ -12,6 +11,7 @@ use windows::Media::Control::{
     GlobalSystemMediaTransportControlsSessionTimelineProperties,
 };
 use windows::Storage::Streams::{DataReader, IRandomAccessStreamReference};
+use windows_future::IAsyncOperation;
 
 use crate::common::{RawSmtcInfo, SmtcStatus};
 
@@ -31,6 +31,15 @@ fn playback_status_str(
 
 fn to_string_lossy(h: &HSTRING) -> String {
     h.to_string_lossy()
+}
+
+/// 阻塞等待一个 WinRT 异步操作完成。
+/// windows 0.62 的 `windows-future` 移除了 `IAsyncOperation::get()`，类型改为
+/// 实现 `IntoFuture`；这里用轻量级 `block_on` 在阻塞线程中取回结果。
+fn block_op<T>(
+    op: impl std::future::IntoFuture<Output = windows::core::Result<T>>,
+) -> windows::core::Result<T> {
+    futures_lite::future::block_on(op.into_future())
 }
 
 /// 将 Windows `FILETIME` 风格的时间戳（自 1601-01-01 UTC 起的 100ns 刻度，
@@ -205,7 +214,7 @@ impl PropsPool {
                             q = inner.cv.wait(q).unwrap_or_else(|e| e.into_inner());
                         }
                     };
-                    let result = job.op.get().ok();
+                    let result = block_op(job.op).ok();
                     let _ = job.reply.send(result);
                 })
                 .expect("spawn smtc-props worker");
@@ -270,7 +279,7 @@ pub async fn smtc_status_raw() -> Result<SmtcStatus, String> {
         tokio::task::spawn_blocking(|| {
                 let manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()
                     .map_err(|e| format!("SMTC RequestAsync: {e}"))
-                    .and_then(|op| op.get().map_err(|e| format!("SMTC get: {e}")))?;
+                    .and_then(|op| block_op(op).map_err(|e| format!("SMTC get: {e}")))?;
 
                 let current_session = manager.GetCurrentSession().ok();
                 let sessions = manager
@@ -528,53 +537,48 @@ pub async fn smtc_control(action: &str, seek_ms: u64) -> Result<(), String> {
     let action = action.to_string();
     let result = tokio::time::timeout(CONTROL_TIMEOUT, async {
         tokio::task::spawn_blocking(move || -> Result<(), String> {
-            let manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()
-                .map_err(|e| format!("SMTC RequestAsync: {e}"))?
-                .get()
-                .map_err(|e| format!("SMTC get: {e}"))?;
+            let manager = block_op(
+                GlobalSystemMediaTransportControlsSessionManager::RequestAsync()
+                    .map_err(|e| format!("SMTC RequestAsync: {e}"))?,
+            )
+            .map_err(|e| format!("SMTC get: {e}"))?;
             let session = pick_control_session(&manager)?;
 
             match action.as_str() {
                 "play" => {
-                    session
-                        .TryPlayAsync()
-                        .map_err(|e| format!("play: {e}"))?
-                        .get()
+                    block_op(session.TryPlayAsync().map_err(|e| format!("play: {e}"))?)
                         .map_err(|e| format!("play: {e}"))?;
                 }
                 "pause" => {
-                    session
-                        .TryPauseAsync()
-                        .map_err(|e| format!("pause: {e}"))?
-                        .get()
+                    block_op(session.TryPauseAsync().map_err(|e| format!("pause: {e}"))?)
                         .map_err(|e| format!("pause: {e}"))?;
                 }
                 "playpause" | "toggle" => {
-                    session
-                        .TryTogglePlayPauseAsync()
-                        .map_err(|e| format!("toggle: {e}"))?
-                        .get()
-                        .map_err(|e| format!("toggle: {e}"))?;
+                    block_op(
+                        session
+                            .TryTogglePlayPauseAsync()
+                            .map_err(|e| format!("toggle: {e}"))?,
+                    )
+                    .map_err(|e| format!("toggle: {e}"))?;
                 }
                 "next" => {
-                    session
-                        .TrySkipNextAsync()
-                        .map_err(|e| format!("next: {e}"))?
-                        .get()
-                        .map_err(|e| format!("next: {e}"))?;
+                    block_op(
+                        session
+                            .TrySkipNextAsync()
+                            .map_err(|e| format!("next: {e}"))?,
+                    )
+                    .map_err(|e| format!("next: {e}"))?;
                 }
                 "previous" => {
-                    session
-                        .TrySkipPreviousAsync()
-                        .map_err(|e| format!("prev: {e}"))?
-                        .get()
-                        .map_err(|e| format!("prev: {e}"))?;
+                    block_op(
+                        session
+                            .TrySkipPreviousAsync()
+                            .map_err(|e| format!("prev: {e}"))?,
+                    )
+                    .map_err(|e| format!("prev: {e}"))?;
                 }
                 "stop" => {
-                    session
-                        .TryStopAsync()
-                        .map_err(|e| format!("stop: {e}"))?
-                        .get()
+                    block_op(session.TryStopAsync().map_err(|e| format!("stop: {e}"))?)
                         .map_err(|e| format!("stop: {e}"))?;
                 }
                 "seek_forward" | "seek_back" => {
@@ -591,11 +595,12 @@ pub async fn smtc_control(action: &str, seek_ms: u64) -> Result<(), String> {
                     } else {
                         (pos - delta).max(0)
                     };
-                    session
-                        .TryChangePlaybackPositionAsync(target)
-                        .map_err(|e| format!("seek: {e}"))?
-                        .get()
-                        .map_err(|e| format!("seek: {e}"))?;
+                    block_op(
+                        session
+                            .TryChangePlaybackPositionAsync(target)
+                            .map_err(|e| format!("seek: {e}"))?,
+                    )
+                    .map_err(|e| format!("seek: {e}"))?;
                 }
                 _ => return Err(format!("unknown action: {action}")),
             }
@@ -626,10 +631,11 @@ const THUMBNAIL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(6)
 pub async fn smtc_thumbnail() -> Result<(Vec<u8>, String), String> {
     let result = tokio::time::timeout(THUMBNAIL_TIMEOUT, async {
         tokio::task::spawn_blocking(|| -> Result<(Vec<u8>, String), String> {
-            let manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()
-                .map_err(|e| format!("SMTC RequestAsync: {e}"))?
-                .get()
-                .map_err(|e| format!("SMTC get: {e}"))?;
+            let manager = block_op(
+                GlobalSystemMediaTransportControlsSessionManager::RequestAsync()
+                    .map_err(|e| format!("SMTC RequestAsync: {e}"))?,
+            )
+            .map_err(|e| format!("SMTC get: {e}"))?;
             let current_session = manager.GetCurrentSession().ok();
             let sessions = manager
                 .GetSessions()
@@ -671,11 +677,12 @@ pub async fn smtc_thumbnail() -> Result<(Vec<u8>, String), String> {
             }
 
             let thumbnail = best_thumbnail.ok_or("thumbnail not found".to_string())?;
-            let stream = thumbnail
-                .OpenReadAsync()
-                .map_err(|e| format!("OpenReadAsync: {e}"))?
-                .get()
-                .map_err(|e| format!("OpenReadAsync: {e}"))?;
+            let stream = block_op(
+                thumbnail
+                    .OpenReadAsync()
+                    .map_err(|e| format!("OpenReadAsync: {e}"))?,
+            )
+            .map_err(|e| format!("OpenReadAsync: {e}"))?;
             let content_type = to_string_lossy(&stream.ContentType().unwrap_or_default());
             let size = stream.Size().map_err(|e| format!("Size: {e}"))? as u32;
 
@@ -684,11 +691,12 @@ pub async fn smtc_thumbnail() -> Result<(Vec<u8>, String), String> {
                 .map_err(|e| format!("GetInputStreamAt: {e}"))?;
             let reader = DataReader::CreateDataReader(&input_stream)
                 .map_err(|e| format!("CreateDataReader: {e}"))?;
-            reader
-                .LoadAsync(size)
-                .map_err(|e| format!("LoadAsync: {e}"))?
-                .get()
-                .map_err(|e| format!("LoadAsync: {e}"))?;
+            block_op(
+                reader
+                    .LoadAsync(size)
+                    .map_err(|e| format!("LoadAsync: {e}"))?,
+            )
+            .map_err(|e| format!("LoadAsync: {e}"))?;
 
             let mut bytes = vec![0u8; size as usize];
             reader
