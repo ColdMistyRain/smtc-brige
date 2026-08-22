@@ -19,7 +19,6 @@ SMTC Bridge 是一个系统媒体传输控制（SMTC）桥接服务。它读取 
 - Rust 2021 + axum 0.7 + tokio 1（full features）+ reqwest 0.12 + serde
 - Windows：windows-rs 0.58（`Media_Control` / `Storage_Streams` / `Foundation` /
   `Foundation_Collections`）
-- 其他平台：`src/smtc/noop.rs` 空实现
 - 图片处理：`image` 0.25（封面缩放为 JPEG）
 - 发布：GitHub Actions（`v*` tag 触发，构建 Windows x86_64 exe）
 
@@ -36,7 +35,7 @@ SMTC Bridge 是一个系统媒体传输控制（SMTC）桥接服务。它读取 
 | `netease.rs` | 网易云源：搜索、歌词、元数据（各带独立 TTL 缓存，实现 `MusicSource` trait） |
 | `qqmusic.rs` | QQ 音乐源：搜索、歌词、元数据（各带独立 TTL 缓存，实现 `MusicSource` trait） |
 | `source.rs` | `MusicSource` trait（async-trait）：`resolve`/`fetch_lyrics`/`sweep_caches`/`name`；`AppState.sources` 按序构成回退链 |
-| `smtc.rs` | 封面 JPEG 缩放（`resize_cover_jpeg`）+ 平台分派（cfg 导出 win/noop） |
+| `smtc.rs` | 封面 JPEG 缩放（`resize_cover_jpeg`）+ 平台分派（cfg 导出 win；非 Windows 直接 `compile_error!`） |
 | `smtc/win.rs` | Windows SMTC：状态采样、控制、缩略图（见下方"关键设计"） |
 
 ## 关键业务逻辑（最容易踩坑的地方）

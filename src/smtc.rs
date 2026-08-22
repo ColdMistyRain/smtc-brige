@@ -43,8 +43,7 @@ mod win;
 #[cfg(target_os = "windows")]
 pub use win::{smtc_control, smtc_status_raw, smtc_thumbnail};
 
-// 其他平台使用空实现（本项目主要面向 Windows）。
+// 本项目仅支持 Windows：SMTC 是 Windows 的系统媒体传输控件能力，
+// 其他平台无法提供等价实现，直接编译报错（而不是运行期返回空桩）。
 #[cfg(not(target_os = "windows"))]
-mod noop;
-#[cfg(not(target_os = "windows"))]
-pub use noop::{smtc_control, smtc_status_raw, smtc_thumbnail};
+compile_error!("smtc-brige 仅支持 Windows（SMTC 是 Windows 系统媒体传输控件）");
