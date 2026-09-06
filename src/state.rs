@@ -43,7 +43,9 @@ pub struct AppState {
     pub lyric_cache: Mutex<HashMap<String, CacheEntry<(LyricResult, MetaInfo)>>>,
     /// 当前正在后台解析的曲目标识（去重集合，
     /// 防止为同一曲目重复启动解析任务）。
-    pub lyric_fetching: Mutex<HashSet<String>>,
+    /// 使用 `std::sync::Mutex` 而非 `tokio::sync::Mutex`，是为了让后台任务的
+    /// RAII 守卫能在 `Drop` 中同步移除标识（防止任务 panic 时标识永久残留）。
+    pub lyric_fetching: std::sync::Mutex<HashSet<String>>,
     pub http_client: reqwest::Client,
     /// 关闭信号：`handle_shutdown` 将其置为 `true`，`main` 等待该信号
     /// 并优雅地排空连接。
@@ -97,7 +99,7 @@ impl AppState {
             qqmusic,
             sources,
             lyric_cache: Mutex::new(HashMap::new()),
-            lyric_fetching: Mutex::new(HashSet::new()),
+            lyric_fetching: std::sync::Mutex::new(HashSet::new()),
             http_client,
             shutdown,
         }

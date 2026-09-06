@@ -42,6 +42,30 @@ fn block_op<T>(
     futures_lite::future::block_on(op.into_future())
 }
 
+/// 带超时地阻塞等待一个 WinRT 异步操作完成。
+///
+/// 损坏的 SMTC 会话可能让其异步操作（如 `TryGetMediaPropertiesAsync`）永不完成，
+/// 此时普通 `block_op` 会永久阻塞调用线程，导致线程被卡死、内存无界增长。
+/// 这里把等待限制在 `timeout` 内：超时后放弃该操作（释放对 COM 对象的引用），
+/// 返回 `None`，让调用线程得以继续处理后续任务。
+fn block_op_timeout<T>(
+    op: impl std::future::IntoFuture<Output = windows::core::Result<T>>,
+    timeout: Duration,
+) -> Option<T> {
+    use futures_lite::FutureExt;
+    futures_lite::future::block_on(async {
+        op.into_future()
+            .or(async {
+                futures_timer::Delay::new(timeout).await;
+                Err(windows::core::Error::from_hresult(
+                    windows::core::HRESULT(0x800705B4u32 as i32), // ERROR_TIMEOUT
+                ))
+            })
+            .await
+            .ok()
+    })
+}
+
 /// 将 Windows `FILETIME` 风格的时间戳（自 1601-01-01 UTC 起的 100ns 刻度，
 /// 由 `DateTime::UniversalTime` 暴露）转换为 Unix 纪元毫秒。
 fn filetime_to_unix_ms(ticks: i64) -> i64 {
@@ -181,6 +205,11 @@ struct PropsJob {
     reply: Sender<Option<MediaProps>>,
 }
 
+/// 队列中允许积压的待处理任务上限。4 个 worker 全部被挂起操作占用时，
+/// 队列若不加限制会无限增长（每个任务都持有 COM 对象与通道），最终导致
+/// 内存越用越大。超出上限后新任务被直接丢弃。
+const MAX_PENDING_JOBS: usize = 16;
+
 /// 一个执行阻塞 `IAsyncOperation::get()` 调用的小型固定 OS 线程池。
 /// 每次调用都新建线程的话，每当损坏的 SMTC 会话永不完成其异步操作时，
 /// 就会泄漏一个 OS 线程，因此所有调用都经由这个有界线程池，
@@ -214,7 +243,9 @@ impl PropsPool {
                             q = inner.cv.wait(q).unwrap_or_else(|e| e.into_inner());
                         }
                     };
-                    let result = block_op(job.op).ok();
+                    // 给等待加硬超时：损坏的会话可能永不完成其异步操作，
+                    // 若不加超时，worker 会永久卡死在这里，队列随之无限堆积。
+                    let result = block_op_timeout(job.op, MEDIA_PROPS_TIMEOUT);
                     let _ = job.reply.send(result);
                 })
                 .expect("spawn smtc-props worker");
@@ -222,10 +253,16 @@ impl PropsPool {
         Self { inner }
     }
 
-    fn submit(&self, job: PropsJob) {
+    /// 提交一个任务到队列。队列已满时返回 `false`（任务被丢弃），
+    /// 保证队列内存有界，不会因为 worker 全部卡死而无限增长。
+    fn submit(&self, job: PropsJob) -> bool {
         let mut q = self.inner.queue.lock().unwrap_or_else(|e| e.into_inner());
+        if q.len() >= MAX_PENDING_JOBS {
+            return false;
+        }
         q.push_back(job);
         self.inner.cv.notify_one();
+        true
     }
 }
 
@@ -255,10 +292,13 @@ fn try_get_media_properties(
 
     let op = session.TryGetMediaPropertiesAsync().ok()?;
     let (reply_tx, reply_rx) = std::sync::mpsc::channel();
-    PROPS_POOL.submit(PropsJob {
+    if !PROPS_POOL.submit(PropsJob {
         op,
         reply: reply_tx,
-    });
+    }) {
+        // 队列已满（worker 可能都被挂起操作占用）—— 直接放弃，避免堆积。
+        return None;
+    }
 
     let result = reply_rx.recv_timeout(MEDIA_PROPS_TIMEOUT).ok().flatten();
     if result.is_none() {
@@ -546,40 +586,52 @@ pub async fn smtc_control(action: &str, seek_ms: u64) -> Result<(), String> {
 
             match action.as_str() {
                 "play" => {
-                    block_op(session.TryPlayAsync().map_err(|e| format!("play: {e}"))?)
-                        .map_err(|e| format!("play: {e}"))?;
+                    block_op_timeout(
+                        session.TryPlayAsync().map_err(|e| format!("play: {e}"))?,
+                        CONTROL_TIMEOUT,
+                    )
+                    .ok_or_else(|| "play: timeout".to_string())?;
                 }
                 "pause" => {
-                    block_op(session.TryPauseAsync().map_err(|e| format!("pause: {e}"))?)
-                        .map_err(|e| format!("pause: {e}"))?;
+                    block_op_timeout(
+                        session.TryPauseAsync().map_err(|e| format!("pause: {e}"))?,
+                        CONTROL_TIMEOUT,
+                    )
+                    .ok_or_else(|| "pause: timeout".to_string())?;
                 }
                 "playpause" | "toggle" => {
-                    block_op(
+                    block_op_timeout(
                         session
                             .TryTogglePlayPauseAsync()
                             .map_err(|e| format!("toggle: {e}"))?,
+                        CONTROL_TIMEOUT,
                     )
-                    .map_err(|e| format!("toggle: {e}"))?;
+                    .ok_or_else(|| "toggle: timeout".to_string())?;
                 }
                 "next" => {
-                    block_op(
+                    block_op_timeout(
                         session
                             .TrySkipNextAsync()
                             .map_err(|e| format!("next: {e}"))?,
+                        CONTROL_TIMEOUT,
                     )
-                    .map_err(|e| format!("next: {e}"))?;
+                    .ok_or_else(|| "next: timeout".to_string())?;
                 }
                 "previous" => {
-                    block_op(
+                    block_op_timeout(
                         session
                             .TrySkipPreviousAsync()
                             .map_err(|e| format!("prev: {e}"))?,
+                        CONTROL_TIMEOUT,
                     )
-                    .map_err(|e| format!("prev: {e}"))?;
+                    .ok_or_else(|| "prev: timeout".to_string())?;
                 }
                 "stop" => {
-                    block_op(session.TryStopAsync().map_err(|e| format!("stop: {e}"))?)
-                        .map_err(|e| format!("stop: {e}"))?;
+                    block_op_timeout(
+                        session.TryStopAsync().map_err(|e| format!("stop: {e}"))?,
+                        CONTROL_TIMEOUT,
+                    )
+                    .ok_or_else(|| "stop: timeout".to_string())?;
                 }
                 "seek_forward" | "seek_back" => {
                     let timeline = session
@@ -595,12 +647,13 @@ pub async fn smtc_control(action: &str, seek_ms: u64) -> Result<(), String> {
                     } else {
                         (pos - delta).max(0)
                     };
-                    block_op(
+                    block_op_timeout(
                         session
                             .TryChangePlaybackPositionAsync(target)
                             .map_err(|e| format!("seek: {e}"))?,
+                        CONTROL_TIMEOUT,
                     )
-                    .map_err(|e| format!("seek: {e}"))?;
+                    .ok_or_else(|| "seek: timeout".to_string())?;
                 }
                 _ => return Err(format!("unknown action: {action}")),
             }
@@ -677,12 +730,13 @@ pub async fn smtc_thumbnail() -> Result<(Vec<u8>, String), String> {
             }
 
             let thumbnail = best_thumbnail.ok_or("thumbnail not found".to_string())?;
-            let stream = block_op(
+            let stream = block_op_timeout(
                 thumbnail
                     .OpenReadAsync()
                     .map_err(|e| format!("OpenReadAsync: {e}"))?,
+                THUMBNAIL_TIMEOUT,
             )
-            .map_err(|e| format!("OpenReadAsync: {e}"))?;
+            .ok_or_else(|| "OpenReadAsync: timeout".to_string())?;
             let content_type = to_string_lossy(&stream.ContentType().unwrap_or_default());
             let size = stream.Size().map_err(|e| format!("Size: {e}"))? as u32;
 
@@ -691,12 +745,11 @@ pub async fn smtc_thumbnail() -> Result<(Vec<u8>, String), String> {
                 .map_err(|e| format!("GetInputStreamAt: {e}"))?;
             let reader = DataReader::CreateDataReader(&input_stream)
                 .map_err(|e| format!("CreateDataReader: {e}"))?;
-            block_op(
-                reader
-                    .LoadAsync(size)
-                    .map_err(|e| format!("LoadAsync: {e}"))?,
+            block_op_timeout(
+                reader.LoadAsync(size).map_err(|e| format!("LoadAsync: {e}"))?,
+                THUMBNAIL_TIMEOUT,
             )
-            .map_err(|e| format!("LoadAsync: {e}"))?;
+            .ok_or_else(|| "LoadAsync: timeout".to_string())?;
 
             let mut bytes = vec![0u8; size as usize];
             reader

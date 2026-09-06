@@ -393,6 +393,22 @@ pub async fn enriched_status(state: &Arc<AppState>, force: bool) -> SmtcStatus {
     }
 }
 
+/// 后台歌词解析去重集合的 RAII 守卫：任务结束时（无论正常完成还是因
+/// panic 提前退出）从 `lyric_fetching` 中移除曲目标识，避免标识永久残留
+/// 导致内存无界增长。
+struct LyricFetchingGuard {
+    state: Arc<AppState>,
+    key: String,
+}
+
+impl Drop for LyricFetchingGuard {
+    fn drop(&mut self) {
+        if let Ok(mut fetching) = self.state.lyric_fetching.lock() {
+            fetching.remove(&self.key);
+        }
+    }
+}
+
 /// 为 `track_key` 启动一次后台歌词解析，除非已有一个正在执行。结果会写入
 /// `AppState::lyric_cache`，因此下一次 `/status` 轮询即可直接返回歌词，
 /// 无需阻塞在慢速歌词 API 上（例如 QQ 搜索卡住约 5s，曾导致 `/status`
@@ -400,7 +416,10 @@ pub async fn enriched_status(state: &Arc<AppState>, force: bool) -> SmtcStatus {
 async fn spawn_lyric_resolution(state: &Arc<AppState>, track_key: String, status: SmtcStatus) {
     // 去重：每首曲目只有一个正在执行的解析任务。
     {
-        let mut fetching = state.lyric_fetching.lock().await;
+        let mut fetching = state
+            .lyric_fetching
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if fetching.contains(&track_key) {
             return;
         }
@@ -409,6 +428,12 @@ async fn spawn_lyric_resolution(state: &Arc<AppState>, track_key: String, status
 
     let state = state.clone();
     tokio::spawn(async move {
+        // 无论任务如何退出（正常/panic），去重标识都会被移除。
+        let _guard = LyricFetchingGuard {
+            state: state.clone(),
+            key: track_key.clone(),
+        };
+
         let source_name = source_for_status(&status);
         let qq: Arc<dyn MusicSource> = state.qqmusic.clone();
         let ne: Arc<dyn MusicSource> = state.netease.clone();
@@ -452,7 +477,7 @@ async fn spawn_lyric_resolution(state: &Arc<AppState>, track_key: String, status
                 MAX_CACHE_ENTRIES,
             );
         }
-        state.lyric_fetching.lock().await.remove(&track_key);
+        // 去重标识由 `LyricFetchingGuard` 的 `Drop` 负责移除。
     });
 }
 

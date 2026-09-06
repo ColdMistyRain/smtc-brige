@@ -340,8 +340,11 @@ pub fn cache_insert_limited<K, V>(
     if cache.len() >= max_entries {
         let target = max_entries * 3 / 4;
         let mut vec: Vec<_> = cache.drain().collect();
+        // 升序排序后 `entry.at` 最小（最旧）的在前 —— 淘汰时保留最新条目，
+        // 因此跳过最旧的 `len - target` 条。
         vec.sort_by_key(|(_, entry)| entry.at);
-        for (k, v) in vec.into_iter().take(target) {
+        let skip = vec.len().saturating_sub(target);
+        for (k, v) in vec.into_iter().skip(skip) {
             cache.insert(k, v);
         }
     }
@@ -691,6 +694,27 @@ mod tests {
             cache_insert_limited(&mut cache, i, CacheEntry::new(i), 60_000, 4);
         }
         assert!(cache.len() <= 4);
+    }
+
+    #[test]
+    fn cache_insert_limited_keeps_newest_entries() {
+        let mut cache: HashMap<u64, CacheEntry<u64>> = HashMap::new();
+        let base = std::time::Instant::now();
+        for i in 0..10u64 {
+            // 越大的 key 其插入时间越新（at 越晚）。
+            let at = base - std::time::Duration::from_millis((10 - i) * 1000);
+            cache_insert_limited(
+                &mut cache,
+                i,
+                CacheEntry { at, value: i },
+                60_000_000,
+                4,
+            );
+        }
+        // 淘汰最旧的，保留最新的 4 个 key：6、7、8、9。
+        let mut keys: Vec<u64> = cache.keys().copied().collect();
+        keys.sort_unstable();
+        assert_eq!(keys, vec![6, 7, 8, 9]);
     }
 
     #[test]

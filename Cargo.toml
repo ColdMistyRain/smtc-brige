@@ -36,6 +36,8 @@ windows = { version = "0.62.2", features = [
 windows-future = "0.3"
 # 在阻塞线程中驱动 WinRT 异步 Future（替代已移除的 `IAsyncOperation::get()`）
 futures-lite = "2"
+# 为阻塞等待 WinRT 异步操作提供可中断的定时器（避免损坏会话永久卡死线程）
+futures-timer = "3"
 [target.'cfg(windows)'.build-dependencies]
 # 把版本/产品信息作为 VERSIONINFO 资源嵌入 Windows exe（见 build.rs）
 winres = "0.1.12"
