@@ -352,7 +352,13 @@ pub fn cache_insert_limited<K, V>(
 }
 
 /// 每个独立缓存的最大条目数，防止内存无限制增长。
-pub const MAX_CACHE_ENTRIES: usize = 512;
+/// 从 512 下调到 64：歌词/搜索/元数据三类缓存合计能省下数 MB 常驻内存，
+/// 把整体工作集控制在 20MB 以内；64 条对连续听歌场景的命中率影响很小。
+pub const MAX_CACHE_ENTRIES: usize = 64;
+
+/// 歌词缓存的最大条目数。三个歌词缓存（`AppState.lyric_cache`、网易云、QQ）
+/// 各用此值，合计 60 首歌词，符合「总共 60 条」的目标。
+pub const LYRIC_CACHE_ENTRIES: usize = 20;
 
 // ── 常量 ───────────────────────────────────────────────────────────────
 

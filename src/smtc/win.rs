@@ -193,7 +193,9 @@ const MEDIA_PROPS_TIMEOUT: Duration = Duration::from_secs(4);
 const SMTC_STATUS_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// 执行阻塞 SMTC 异步操作的工作线程数。
-const PROPS_WORKERS: usize = 4;
+/// 属性获取并发很低，且 `block_op_timeout` 保证线程不会因挂起操作永久
+/// 卡死，1 个 worker 即可（最坏情况排队等待 4s 超时后继续）。
+const PROPS_WORKERS: usize = 1;
 /// 对媒体属性操作超时的会话停止探测多长时间
 /// （永不完成的损坏会话不能一直占用一个工作线程）。
 const HUNG_SESSION_COOLDOWN: Duration = Duration::from_secs(60);

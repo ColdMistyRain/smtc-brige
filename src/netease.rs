@@ -6,7 +6,8 @@ use async_trait::async_trait;
 
 use crate::common::{
     cache_insert_limited, merge_translation, normalize_text, parse_lrc, search_score, sweep_cache,
-    urlencoding, CacheEntry, LyricResult, MetaInfo, SmtcStatus, TrackInfo, MAX_CACHE_ENTRIES,
+    urlencoding, CacheEntry, LyricResult, MetaInfo, SmtcStatus, TrackInfo, LYRIC_CACHE_ENTRIES,
+    MAX_CACHE_ENTRIES,
 };
 use crate::source::MusicSource;
 
@@ -180,7 +181,7 @@ impl NeteaseSource {
             ncm_id,
             CacheEntry::new(result.clone()),
             self.lyric_cache_ms,
-            MAX_CACHE_ENTRIES,
+            LYRIC_CACHE_ENTRIES,
         );
         result
     }

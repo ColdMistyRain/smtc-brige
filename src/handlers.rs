@@ -13,7 +13,7 @@ use serde::Deserialize;
 use crate::common::{
     cache_insert_limited, infer_track_metadata, is_qqmusic_source, lyric_at, unix_now_ms,
     with_live_position, CacheEntry, LyricPosition, LyricResult, MetaInfo, PositionAnchor,
-    SmtcStatus, MAX_CACHE_ENTRIES,
+    SmtcStatus, LYRIC_CACHE_ENTRIES,
 };
 use crate::config::*;
 use crate::smtc::{resize_cover_jpeg, smtc_control, smtc_status_raw, smtc_thumbnail};
@@ -474,7 +474,7 @@ async fn spawn_lyric_resolution(state: &Arc<AppState>, track_key: String, status
                 track_key.clone(),
                 CacheEntry::new((found, meta)),
                 LYRIC_CACHE_MS,
-                MAX_CACHE_ENTRIES,
+                LYRIC_CACHE_ENTRIES,
             );
         }
         // 去重标识由 `LyricFetchingGuard` 的 `Drop` 负责移除。
@@ -887,7 +887,7 @@ pub async fn handle_cover(
                 cache_key,
                 CacheEntry::new((resized.clone(), "image/jpeg".to_string())),
                 THUMBNAIL_CACHE_MS,
-                64,
+                16,
             );
             return Ok(binary_response(resized, "image/jpeg", false));
         }

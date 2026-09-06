@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use crate::common::{
     cache_insert_limited, decode_html, maybe_base64_text, merge_translation, normalize_text,
     parse_lrc, search_score, split_artists, sweep_cache, urlencoding, CacheEntry, LyricResult,
-    MetaInfo, SmtcStatus, TrackInfo, MAX_CACHE_ENTRIES,
+    MetaInfo, SmtcStatus, TrackInfo, LYRIC_CACHE_ENTRIES, MAX_CACHE_ENTRIES,
 };
 use crate::source::MusicSource;
 
@@ -417,7 +417,7 @@ impl QQMusicSource {
                                 cache_key,
                                 CacheEntry::new(value.clone()),
                                 self.lyric_cache_ms,
-                                MAX_CACHE_ENTRIES,
+                                LYRIC_CACHE_ENTRIES,
                             );
                             return value;
                         }
@@ -437,7 +437,7 @@ impl QQMusicSource {
             cache_key,
             CacheEntry::new(value.clone()),
             self.lyric_cache_ms,
-            MAX_CACHE_ENTRIES,
+            LYRIC_CACHE_ENTRIES,
         );
         value
     }

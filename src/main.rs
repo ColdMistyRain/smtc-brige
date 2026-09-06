@@ -18,8 +18,22 @@ use std::io;
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 
-#[tokio::main]
-async fn main() {
+// 手动构建 tokio 运行时，以便同时限制 worker 线程数与阻塞线程池上限
+// （`#[tokio::main]` 宏只支持 `worker_threads`，不支持 `max_blocking_threads`）。
+// 本程序负载极低（每 ~1.5s 一次状态轮询 + 少量 HTTP），默认「每核一个 worker」
+// 在本机 20 逻辑核上会开出 20 个线程；阻塞任务（SMTC 采样/封面缩放/控制）
+// 并发也很低，给 8 个上限即可，避免阻塞线程池无谓扩张。
+fn main() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .max_blocking_threads(4)
+        .enable_all()
+        .build()
+        .expect("build tokio runtime");
+    rt.block_on(async_main());
+}
+
+async fn async_main() {
     // ── 日志轮转 ─────────────────────────────────────────────────────
     const LOG_PATH: &str = "smtc-bridge.log";
     const MAX_LOG_BYTES: u64 = 10 * 1024 * 1024; // 10 MiB
