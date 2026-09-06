@@ -748,7 +748,9 @@ pub async fn smtc_thumbnail() -> Result<(Vec<u8>, String), String> {
             let reader = DataReader::CreateDataReader(&input_stream)
                 .map_err(|e| format!("CreateDataReader: {e}"))?;
             block_op_timeout(
-                reader.LoadAsync(size).map_err(|e| format!("LoadAsync: {e}"))?,
+                reader
+                    .LoadAsync(size)
+                    .map_err(|e| format!("LoadAsync: {e}"))?,
                 THUMBNAIL_TIMEOUT,
             )
             .ok_or_else(|| "LoadAsync: timeout".to_string())?;

@@ -709,13 +709,7 @@ mod tests {
         for i in 0..10u64 {
             // 越大的 key 其插入时间越新（at 越晚）。
             let at = base - std::time::Duration::from_millis((10 - i) * 1000);
-            cache_insert_limited(
-                &mut cache,
-                i,
-                CacheEntry { at, value: i },
-                60_000_000,
-                4,
-            );
+            cache_insert_limited(&mut cache, i, CacheEntry { at, value: i }, 60_000_000, 4);
         }
         // 淘汰最旧的，保留最新的 4 个 key：6、7、8、9。
         let mut keys: Vec<u64> = cache.keys().copied().collect();
